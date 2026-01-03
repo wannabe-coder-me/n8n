@@ -1,0 +1,393 @@
+{
+  "name": "RhythmTraffic Document Ingestion",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ingest-documents",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "manual-trigger",
+      "name": "Manual Trigger Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 500]
+    },
+    {
+      "parameters": {
+        "operation": "list",
+        "folderPath": "/documents",
+        "options": {
+          "recursive": true
+        }
+      },
+      "id": "list-files-local",
+      "name": "List Local Files",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [500, 300],
+      "notes": "Alternative: Use Google Drive, Dropbox, or S3 node"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "or",
+          "conditions": [
+            {
+              "id": "pdf-check",
+              "operator": {
+                "type": "string",
+                "operation": "endsWith"
+              },
+              "leftValue": "={{ $json.name }}",
+              "rightValue": ".pdf"
+            },
+            {
+              "id": "docx-check",
+              "operator": {
+                "type": "string",
+                "operation": "endsWith"
+              },
+              "leftValue": "={{ $json.name }}",
+              "rightValue": ".docx"
+            },
+            {
+              "id": "doc-check",
+              "operator": {
+                "type": "string",
+                "operation": "endsWith"
+              },
+              "leftValue": "={{ $json.name }}",
+              "rightValue": ".doc"
+            },
+            {
+              "id": "txt-check",
+              "operator": {
+                "type": "string",
+                "operation": "endsWith"
+              },
+              "leftValue": "={{ $json.name }}",
+              "rightValue": ".txt"
+            }
+          ]
+        }
+      },
+      "id": "filter-documents",
+      "name": "Filter Documents",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 5,
+        "options": {}
+      },
+      "id": "batch-files",
+      "name": "Batch Files",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "filePath": "={{ $json.path }}"
+      },
+      "id": "read-file",
+      "name": "Read File",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "operation": "extractText",
+        "options": {}
+      },
+      "id": "extract-pdf",
+      "name": "Extract PDF Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [1300, 200]
+    },
+    {
+      "parameters": {
+        "operation": "extractText",
+        "options": {}
+      },
+      "id": "extract-docx",
+      "name": "Extract Word Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [1300, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge extracted text from different file types\nconst items = $input.all();\nlet allText = '';\nlet fileName = '';\n\nfor (const item of items) {\n  if (item.json.text) {\n    allText += item.json.text;\n  }\n  if (item.json.name) {\n    fileName = item.json.name;\n  }\n}\n\n// Clean and normalize the text\nallText = allText\n  .replace(/\\r\\n/g, '\\n')\n  .replace(/\\n{3,}/g, '\\n\\n')\n  .trim();\n\nreturn {\n  fileName,\n  content: allText,\n  extractedAt: new Date().toISOString(),\n  charCount: allText.length,\n  wordCount: allText.split(/\\s+/).length\n};"
+      },
+      "id": "merge-text",
+      "name": "Merge & Clean Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Split text into chunks for embedding\nconst content = $json.content;\nconst fileName = $json.fileName;\nconst chunkSize = 1000; // characters per chunk\nconst chunkOverlap = 200; // overlap between chunks\n\nconst chunks = [];\nlet startIndex = 0;\n\nwhile (startIndex < content.length) {\n  const endIndex = Math.min(startIndex + chunkSize, content.length);\n  \n  // Try to break at a sentence or paragraph boundary\n  let actualEnd = endIndex;\n  if (endIndex < content.length) {\n    const searchStart = Math.max(endIndex - 100, startIndex);\n    const searchText = content.substring(searchStart, endIndex + 50);\n    \n    // Look for paragraph break, then sentence break, then word break\n    const paragraphBreak = searchText.lastIndexOf('\\n\\n');\n    const sentenceBreak = Math.max(\n      searchText.lastIndexOf('. '),\n      searchText.lastIndexOf('? '),\n      searchText.lastIndexOf('! ')\n    );\n    const wordBreak = searchText.lastIndexOf(' ');\n    \n    if (paragraphBreak > 50) {\n      actualEnd = searchStart + paragraphBreak + 2;\n    } else if (sentenceBreak > 50) {\n      actualEnd = searchStart + sentenceBreak + 2;\n    } else if (wordBreak > 50) {\n      actualEnd = searchStart + wordBreak + 1;\n    }\n  }\n  \n  const chunkText = content.substring(startIndex, actualEnd).trim();\n  \n  if (chunkText.length > 50) { // Only add meaningful chunks\n    chunks.push({\n      fileName,\n      chunkIndex: chunks.length,\n      content: chunkText,\n      startChar: startIndex,\n      endChar: actualEnd,\n      metadata: {\n        source: fileName,\n        chunkId: `${fileName}_chunk_${chunks.length}`,\n        createdAt: new Date().toISOString()\n      }\n    });\n  }\n  \n  startIndex = actualEnd - chunkOverlap;\n}\n\nreturn chunks;"
+      },
+      "id": "chunk-text",
+      "name": "Chunk Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1700, 300]
+    },
+    {
+      "parameters": {
+        "model": "text-embedding-3-small",
+        "options": {}
+      },
+      "id": "create-embeddings",
+      "name": "Create Embeddings",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1,
+      "position": [1900, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-creds",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "options": {}
+      },
+      "id": "store-vectors",
+      "name": "Store in Vector DB",
+      "type": "@n8n/n8n-nodes-langchain.vectorStorePinecone",
+      "typeVersion": 1,
+      "position": [2100, 300],
+      "credentials": {
+        "pineconeApi": {
+          "id": "pinecone-creds",
+          "name": "Pinecone API"
+        }
+      },
+      "notes": "Alternative: Use Qdrant, Supabase, or Postgres pgvector"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log ingestion results\nconst items = $input.all();\n\nconst summary = {\n  totalChunks: items.length,\n  files: [...new Set(items.map(i => i.json.fileName))],\n  completedAt: new Date().toISOString(),\n  status: 'success'\n};\n\nconsole.log('Document ingestion completed:', summary);\n\nreturn summary;"
+      },
+      "id": "log-results",
+      "name": "Log Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2300, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, message: 'Document ingestion completed', ...($json) }) }}"
+      },
+      "id": "respond-webhook",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2500, 500]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "List Local Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger Webhook": {
+      "main": [
+        [
+          {
+            "node": "List Local Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Local Files": {
+      "main": [
+        [
+          {
+            "node": "Filter Documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Documents": {
+      "main": [
+        [
+          {
+            "node": "Batch Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch Files": {
+      "main": [
+        [
+          {
+            "node": "Read File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read File": {
+      "main": [
+        [
+          {
+            "node": "Extract PDF Text",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Extract Word Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract PDF Text": {
+      "main": [
+        [
+          {
+            "node": "Merge & Clean Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Word Text": {
+      "main": [
+        [
+          {
+            "node": "Merge & Clean Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge & Clean Text": {
+      "main": [
+        [
+          {
+            "node": "Chunk Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chunk Text": {
+      "main": [
+        [
+          {
+            "node": "Create Embeddings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Embeddings": {
+      "main": [
+        [
+          {
+            "node": "Store in Vector DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store in Vector DB": {
+      "main": [
+        [
+          {
+            "node": "Log Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Results": {
+      "main": [
+        [
+          {
+            "node": "Respond Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "ingestion",
+      "id": "3"
+    },
+    {
+      "name": "documents",
+      "id": "4"
+    }
+  ],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}

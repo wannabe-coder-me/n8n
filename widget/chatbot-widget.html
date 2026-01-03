@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RhythmTraffic Chat Widget</title>
+    <style>
+        /* ===== CHAT WIDGET STYLES ===== */
+        :root {
+            --rt-primary: #2563eb;
+            --rt-primary-dark: #1d4ed8;
+            --rt-secondary: #f8fafc;
+            --rt-text: #1e293b;
+            --rt-text-light: #64748b;
+            --rt-white: #ffffff;
+            --rt-border: #e2e8f0;
+            --rt-shadow: 0 10px 40px rgba(0,0,0,0.15);
+            --rt-radius: 16px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+        }
+
+        /* Chat Button */
+        #rt-chat-button {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--rt-primary) 0%, var(--rt-primary-dark) 100%);
+            border: none;
+            cursor: pointer;
+            box-shadow: var(--rt-shadow);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            z-index: 9999;
+        }
+
+        #rt-chat-button:hover {
+            transform: scale(1.1);
+            box-shadow: 0 12px 48px rgba(37, 99, 235, 0.4);
+        }
+
+        #rt-chat-button svg {
+            width: 28px;
+            height: 28px;
+            fill: var(--rt-white);
+        }
+
+        #rt-chat-button .close-icon {
+            display: none;
+        }
+
+        #rt-chat-button.open .chat-icon {
+            display: none;
+        }
+
+        #rt-chat-button.open .close-icon {
+            display: block;
+        }
+
+        /* Chat Container */
+        #rt-chat-container {
+            position: fixed;
+            bottom: 100px;
+            right: 24px;
+            width: 400px;
+            height: 600px;
+            max-height: calc(100vh - 140px);
+            background: var(--rt-white);
+            border-radius: var(--rt-radius);
+            box-shadow: var(--rt-shadow);
+            display: none;
+            flex-direction: column;
+            overflow: hidden;
+            z-index: 9998;
+            animation: slideUp 0.3s ease;
+        }
+
+        #rt-chat-container.open {
+            display: flex;
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Chat Header */
+        #rt-chat-header {
+            background: linear-gradient(135deg, var(--rt-primary) 0%, var(--rt-primary-dark) 100%);
+            color: var(--rt-white);
+            padding: 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        #rt-chat-header .avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+        }
+
+        #rt-chat-header .info h3 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 2px;
+        }
+
+        #rt-chat-header .info p {
+            font-size: 13px;
+            opacity: 0.9;
+        }
+
+        #rt-chat-header .status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+        }
+
+        #rt-chat-header .status::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: #22c55e;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Chat Messages */
+        #rt-chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            background: var(--rt-secondary);
+        }
+
+        .rt-message {
+            max-width: 85%;
+            padding: 12px 16px;
+            border-radius: 16px;
+            font-size: 14px;
+            line-height: 1.5;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .rt-message.bot {
+            background: var(--rt-white);
+            color: var(--rt-text);
+            align-self: flex-start;
+            border-bottom-left-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+
+        .rt-message.user {
+            background: linear-gradient(135deg, var(--rt-primary) 0%, var(--rt-primary-dark) 100%);
+            color: var(--rt-white);
+            align-self: flex-end;
+            border-bottom-right-radius: 4px;
+        }
+
+        .rt-message.bot .timestamp,
+        .rt-message.user .timestamp {
+            font-size: 11px;
+            opacity: 0.7;
+            margin-top: 6px;
+            display: block;
+        }
+
+        /* Typing Indicator */
+        .rt-typing {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 12px 16px;
+            background: var(--rt-white);
+            border-radius: 16px;
+            border-bottom-left-radius: 4px;
+            align-self: flex-start;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+
+        .rt-typing span {
+            width: 8px;
+            height: 8px;
+            background: var(--rt-text-light);
+            border-radius: 50%;
+            animation: typing 1.4s infinite;
+        }
+
+        .rt-typing span:nth-child(2) { animation-delay: 0.2s; }
+        .rt-typing span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typing {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-6px); }
+        }
+
+        /* Quick Actions */
+        #rt-quick-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            padding: 12px 20px;
+            background: var(--rt-white);
+            border-top: 1px solid var(--rt-border);
+        }
+
+        .rt-quick-btn {
+            padding: 8px 14px;
+            background: var(--rt-secondary);
+            border: 1px solid var(--rt-border);
+            border-radius: 20px;
+            font-size: 13px;
+            color: var(--rt-text);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .rt-quick-btn:hover {
+            background: var(--rt-primary);
+            color: var(--rt-white);
+            border-color: var(--rt-primary);
+        }
+
+        /* Chat Input */
+        #rt-chat-input-container {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 16px 20px;
+            background: var(--rt-white);
+            border-top: 1px solid var(--rt-border);
+        }
+
+        #rt-chat-input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 1px solid var(--rt-border);
+            border-radius: 24px;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s ease;
+        }
+
+        #rt-chat-input:focus {
+            border-color: var(--rt-primary);
+        }
+
+        #rt-chat-input::placeholder {
+            color: var(--rt-text-light);
+        }
+
+        #rt-send-btn {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--rt-primary) 0%, var(--rt-primary-dark) 100%);
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.2s ease;
+        }
+
+        #rt-send-btn:hover {
+            transform: scale(1.05);
+        }
+
+        #rt-send-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        #rt-send-btn svg {
+            width: 20px;
+            height: 20px;
+            fill: var(--rt-white);
+        }
+
+        /* Powered By */
+        #rt-powered-by {
+            text-align: center;
+            padding: 8px;
+            font-size: 11px;
+            color: var(--rt-text-light);
+            background: var(--rt-white);
+        }
+
+        /* Mobile Responsive */
+        @media (max-width: 480px) {
+            #rt-chat-container {
+                width: calc(100vw - 16px);
+                height: calc(100vh - 100px);
+                right: 8px;
+                bottom: 88px;
+                border-radius: 12px;
+            }
+
+            #rt-chat-button {
+                width: 56px;
+                height: 56px;
+                right: 16px;
+                bottom: 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<!-- Chat Button -->
+<button id="rt-chat-button" onclick="toggleChat()" aria-label="Open chat">
+    <svg class="chat-icon" viewBox="0 0 24 24">
+        <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12z"/>
+        <path d="M7 9h10v2H7zM7 5h10v2H7z"/>
+    </svg>
+    <svg class="close-icon" viewBox="0 0 24 24">
+        <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+    </svg>
+</button>
+
+<!-- Chat Container -->
+<div id="rt-chat-container">
+    <!-- Header -->
+    <div id="rt-chat-header">
+        <div class="avatar">RT</div>
+        <div class="info">
+            <h3>RhythmTraffic Assistant</h3>
+            <p class="status">Online and ready to help</p>
+        </div>
+    </div>
+
+    <!-- Messages -->
+    <div id="rt-chat-messages">
+        <!-- Welcome message will be added by JS -->
+    </div>
+
+    <!-- Quick Actions -->
+    <div id="rt-quick-actions">
+        <button class="rt-quick-btn" onclick="sendQuickMessage('Tell me about your services')">Our Services</button>
+        <button class="rt-quick-btn" onclick="sendQuickMessage('I want to book a meeting with an engineer')">Book a Meeting</button>
+        <button class="rt-quick-btn" onclick="sendQuickMessage('What makes you different?')">Why RhythmTraffic?</button>
+    </div>
+
+    <!-- Input -->
+    <div id="rt-chat-input-container">
+        <input
+            type="text"
+            id="rt-chat-input"
+            placeholder="Type your message..."
+            onkeypress="handleKeyPress(event)"
+        >
+        <button id="rt-send-btn" onclick="sendMessage()" aria-label="Send message">
+            <svg viewBox="0 0 24 24">
+                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+            </svg>
+        </button>
+    </div>
+
+    <!-- Powered By -->
+    <div id="rt-powered-by">
+        Powered by RhythmTraffic AI
+    </div>
+</div>
+
+<script>
+// ===== CONFIGURATION =====
+const RT_CONFIG = {
+    // Replace with your n8n webhook URL
+    webhookUrl: 'YOUR_N8N_WEBHOOK_URL/webhook/chat',
+
+    // Company info
+    companyName: 'RhythmTraffic',
+
+    // Welcome message
+    welcomeMessage: `Hi there! Welcome to RhythmTraffic! I'm your AI assistant, here to help answer your questions about our services and solutions.
+
+Whether you're curious about what we do, need technical information, or want to schedule a meeting with one of our engineers - I'm here to help!
+
+What can I assist you with today?`,
+
+    // Session ID (auto-generated)
+    sessionId: generateSessionId()
+};
+
+// ===== HELPER FUNCTIONS =====
+function generateSessionId() {
+    const stored = localStorage.getItem('rt_session_id');
+    if (stored) return stored;
+
+    const newId = 'rt_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    localStorage.setItem('rt_session_id', newId);
+    return newId;
+}
+
+function formatTime(date) {
+    return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+}
+
+// ===== CHAT FUNCTIONS =====
+let isOpen = false;
+let isTyping = false;
+
+function toggleChat() {
+    isOpen = !isOpen;
+    const container = document.getElementById('rt-chat-container');
+    const button = document.getElementById('rt-chat-button');
+
+    if (isOpen) {
+        container.classList.add('open');
+        button.classList.add('open');
+        document.getElementById('rt-chat-input').focus();
+
+        // Show welcome message if first time
+        const messages = document.getElementById('rt-chat-messages');
+        if (messages.children.length === 0) {
+            addMessage(RT_CONFIG.welcomeMessage, 'bot');
+        }
+    } else {
+        container.classList.remove('open');
+        button.classList.remove('open');
+    }
+}
+
+function addMessage(content, sender) {
+    const messages = document.getElementById('rt-chat-messages');
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `rt-message ${sender}`;
+
+    // Format message content (support basic markdown)
+    let formattedContent = content
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/\n/g, '<br>');
+
+    messageDiv.innerHTML = `
+        ${formattedContent}
+        <span class="timestamp">${formatTime(new Date())}</span>
+    `;
+
+    messages.appendChild(messageDiv);
+    messages.scrollTop = messages.scrollHeight;
+}
+
+function showTyping() {
+    if (isTyping) return;
+    isTyping = true;
+
+    const messages = document.getElementById('rt-chat-messages');
+    const typingDiv = document.createElement('div');
+    typingDiv.className = 'rt-typing';
+    typingDiv.id = 'rt-typing-indicator';
+    typingDiv.innerHTML = '<span></span><span></span><span></span>';
+    messages.appendChild(typingDiv);
+    messages.scrollTop = messages.scrollHeight;
+}
+
+function hideTyping() {
+    isTyping = false;
+    const typing = document.getElementById('rt-typing-indicator');
+    if (typing) typing.remove();
+}
+
+function handleKeyPress(event) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        sendMessage();
+    }
+}
+
+function sendQuickMessage(message) {
+    document.getElementById('rt-chat-input').value = message;
+    sendMessage();
+}
+
+async function sendMessage() {
+    const input = document.getElementById('rt-chat-input');
+    const message = input.value.trim();
+
+    if (!message) return;
+
+    // Clear input and disable send button
+    input.value = '';
+    document.getElementById('rt-send-btn').disabled = true;
+
+    // Add user message
+    addMessage(message, 'user');
+
+    // Show typing indicator
+    showTyping();
+
+    // Hide quick actions after first message
+    document.getElementById('rt-quick-actions').style.display = 'none';
+
+    try {
+        const response = await fetch(RT_CONFIG.webhookUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                message: message,
+                sessionId: RT_CONFIG.sessionId,
+                timestamp: new Date().toISOString(),
+                pageUrl: window.location.href,
+                pageTitle: document.title
+            })
+        });
+
+        if (!response.ok) throw new Error('Network response was not ok');
+
+        const data = await response.json();
+
+        hideTyping();
+        addMessage(data.response, 'bot');
+
+        // Handle meeting booking intent
+        if (data.hasMeetingIntent) {
+            // Could trigger calendar picker or form here
+            console.log('Meeting intent detected');
+        }
+
+    } catch (error) {
+        console.error('Chat error:', error);
+        hideTyping();
+        addMessage('I apologize, but I\'m having trouble connecting right now. Please try again in a moment, or feel free to reach out to us directly at contact@rhythmtraffic.com', 'bot');
+    }
+
+    // Re-enable send button
+    document.getElementById('rt-send-btn').disabled = false;
+}
+
+// ===== INITIALIZATION =====
+document.addEventListener('DOMContentLoaded', function() {
+    // Check for returning visitor
+    const lastVisit = localStorage.getItem('rt_last_visit');
+    if (lastVisit) {
+        const daysSince = (Date.now() - parseInt(lastVisit)) / (1000 * 60 * 60 * 24);
+        if (daysSince < 7) {
+            // Returning visitor within a week - could customize greeting
+            console.log('Welcome back!');
+        }
+    }
+    localStorage.setItem('rt_last_visit', Date.now().toString());
+
+    // Auto-open chat after delay (optional - uncomment to enable)
+    // setTimeout(() => { if (!isOpen) toggleChat(); }, 30000);
+});
+
+// ===== EMBED CODE FOR OTHER PAGES =====
+// To embed this widget on any page, add this script tag:
+// <script src="https://your-domain.com/chatbot-widget.js"></script>
+</script>
+
+</body>
+</html>

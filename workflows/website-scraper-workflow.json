@@ -1,0 +1,344 @@
+{
+  "name": "RhythmTraffic Website Scraper",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "daily-schedule",
+      "name": "Daily Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "scrape-website",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "manual-scrape",
+      "name": "Manual Scrape Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Define pages to scrape from rhythmtraffic.com\nconst baseUrl = 'https://www.rhythmtraffic.com';\n\n// Add all important pages here\nconst pages = [\n  { url: baseUrl, name: 'Home' },\n  { url: `${baseUrl}/about`, name: 'About Us' },\n  { url: `${baseUrl}/services`, name: 'Services' },\n  { url: `${baseUrl}/solutions`, name: 'Solutions' },\n  { url: `${baseUrl}/products`, name: 'Products' },\n  { url: `${baseUrl}/contact`, name: 'Contact' },\n  { url: `${baseUrl}/faq`, name: 'FAQ' },\n  { url: `${baseUrl}/blog`, name: 'Blog' },\n  { url: `${baseUrl}/case-studies`, name: 'Case Studies' },\n  { url: `${baseUrl}/pricing`, name: 'Pricing' }\n];\n\nreturn pages.map(page => ({\n  json: {\n    ...page,\n    scrapedAt: new Date().toISOString()\n  }\n}));"
+      },
+      "id": "define-pages",
+      "name": "Define Pages to Scrape",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 400]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "fetch-page",
+      "name": "Fetch Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [700, 400],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "extractHtmlContent",
+        "sourceData": "binary",
+        "dataPropertyName": "data",
+        "extractionValues": {
+          "values": [
+            {
+              "key": "title",
+              "cssSelector": "title"
+            },
+            {
+              "key": "h1",
+              "cssSelector": "h1",
+              "returnArray": true
+            },
+            {
+              "key": "h2",
+              "cssSelector": "h2",
+              "returnArray": true
+            },
+            {
+              "key": "paragraphs",
+              "cssSelector": "p",
+              "returnArray": true
+            },
+            {
+              "key": "listItems",
+              "cssSelector": "li",
+              "returnArray": true
+            },
+            {
+              "key": "metaDescription",
+              "cssSelector": "meta[name='description']",
+              "returnValue": "attribute",
+              "attribute": "content"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "extract-html",
+      "name": "Extract HTML Content",
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process and structure the extracted content\nconst input = $input.first().json;\nconst pageName = $('Fetch Page').first().json.name || 'Unknown Page';\nconst pageUrl = $('Fetch Page').first().json.url;\n\n// Combine all text content\nlet content = '';\n\n// Add title\nif (input.title) {\n  content += `# ${input.title}\\n\\n`;\n}\n\n// Add meta description\nif (input.metaDescription) {\n  content += `${input.metaDescription}\\n\\n`;\n}\n\n// Add headings and structure\nif (input.h1 && input.h1.length > 0) {\n  input.h1.forEach(h => {\n    if (h && h.trim()) content += `## ${h.trim()}\\n\\n`;\n  });\n}\n\nif (input.h2 && input.h2.length > 0) {\n  input.h2.forEach(h => {\n    if (h && h.trim()) content += `### ${h.trim()}\\n\\n`;\n  });\n}\n\n// Add paragraphs\nif (input.paragraphs && input.paragraphs.length > 0) {\n  input.paragraphs.forEach(p => {\n    if (p && p.trim() && p.trim().length > 20) {\n      content += `${p.trim()}\\n\\n`;\n    }\n  });\n}\n\n// Add list items as bullet points\nif (input.listItems && input.listItems.length > 0) {\n  const validItems = input.listItems.filter(li => li && li.trim() && li.trim().length > 10);\n  if (validItems.length > 0) {\n    validItems.forEach(li => {\n      content += `- ${li.trim()}\\n`;\n    });\n    content += '\\n';\n  }\n}\n\n// Clean up content\ncontent = content\n  .replace(/\\n{3,}/g, '\\n\\n')\n  .replace(/\\s+/g, ' ')\n  .replace(/ \\n/g, '\\n')\n  .trim();\n\nreturn {\n  pageName,\n  pageUrl,\n  content,\n  charCount: content.length,\n  wordCount: content.split(/\\s+/).length,\n  scrapedAt: new Date().toISOString()\n};"
+      },
+      "id": "process-content",
+      "name": "Process Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.charCount }}",
+              "operation": "larger",
+              "value2": 100
+            }
+          ]
+        }
+      },
+      "id": "filter-empty",
+      "name": "Filter Empty Pages",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1300, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Chunk website content for vector storage\nconst content = $json.content;\nconst pageName = $json.pageName;\nconst pageUrl = $json.pageUrl;\nconst chunkSize = 800;\nconst chunkOverlap = 150;\n\nconst chunks = [];\nlet startIndex = 0;\n\nwhile (startIndex < content.length) {\n  const endIndex = Math.min(startIndex + chunkSize, content.length);\n  \n  let actualEnd = endIndex;\n  if (endIndex < content.length) {\n    const searchStart = Math.max(endIndex - 80, startIndex);\n    const searchText = content.substring(searchStart, endIndex + 40);\n    \n    const paragraphBreak = searchText.lastIndexOf('\\n\\n');\n    const sentenceBreak = Math.max(\n      searchText.lastIndexOf('. '),\n      searchText.lastIndexOf('? '),\n      searchText.lastIndexOf('! ')\n    );\n    \n    if (paragraphBreak > 40) {\n      actualEnd = searchStart + paragraphBreak + 2;\n    } else if (sentenceBreak > 40) {\n      actualEnd = searchStart + sentenceBreak + 2;\n    }\n  }\n  \n  const chunkText = content.substring(startIndex, actualEnd).trim();\n  \n  if (chunkText.length > 50) {\n    chunks.push({\n      pageName,\n      pageUrl,\n      chunkIndex: chunks.length,\n      content: chunkText,\n      metadata: {\n        source: 'website',\n        page: pageName,\n        url: pageUrl,\n        chunkId: `web_${pageName.toLowerCase().replace(/\\s+/g, '_')}_${chunks.length}`,\n        createdAt: new Date().toISOString()\n      }\n    });\n  }\n  \n  startIndex = actualEnd - chunkOverlap;\n}\n\nreturn chunks;"
+      },
+      "id": "chunk-website",
+      "name": "Chunk Website Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, 300]
+    },
+    {
+      "parameters": {
+        "model": "text-embedding-3-small",
+        "options": {}
+      },
+      "id": "embed-website",
+      "name": "Create Website Embeddings",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1,
+      "position": [1700, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-creds",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "options": {}
+      },
+      "id": "store-website-vectors",
+      "name": "Store Website Vectors",
+      "type": "@n8n/n8n-nodes-langchain.vectorStorePinecone",
+      "typeVersion": 1,
+      "position": [1900, 300],
+      "credentials": {
+        "pineconeApi": {
+          "id": "pinecone-creds",
+          "name": "Pinecone API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Summarize scraping results\nconst items = $input.all();\n\nreturn {\n  totalChunks: items.length,\n  pages: [...new Set(items.map(i => i.json.pageName))],\n  completedAt: new Date().toISOString(),\n  status: 'success'\n};"
+      },
+      "id": "summarize-scrape",
+      "name": "Summarize Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2100, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, message: 'Website scraping completed', ...($json) }) }}"
+      },
+      "id": "respond-scrape",
+      "name": "Respond Scrape Complete",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2300, 500]
+    }
+  ],
+  "connections": {
+    "Daily Schedule": {
+      "main": [
+        [
+          {
+            "node": "Define Pages to Scrape",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Scrape Trigger": {
+      "main": [
+        [
+          {
+            "node": "Define Pages to Scrape",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Define Pages to Scrape": {
+      "main": [
+        [
+          {
+            "node": "Fetch Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Page": {
+      "main": [
+        [
+          {
+            "node": "Extract HTML Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract HTML Content": {
+      "main": [
+        [
+          {
+            "node": "Process Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Content": {
+      "main": [
+        [
+          {
+            "node": "Filter Empty Pages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Empty Pages": {
+      "main": [
+        [
+          {
+            "node": "Chunk Website Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chunk Website Content": {
+      "main": [
+        [
+          {
+            "node": "Create Website Embeddings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Website Embeddings": {
+      "main": [
+        [
+          {
+            "node": "Store Website Vectors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Website Vectors": {
+      "main": [
+        [
+          {
+            "node": "Summarize Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize Results": {
+      "main": [
+        [
+          {
+            "node": "Respond Scrape Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "scraper",
+      "id": "5"
+    },
+    {
+      "name": "website",
+      "id": "6"
+    }
+  ],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}

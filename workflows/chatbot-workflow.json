@@ -1,0 +1,336 @@
+{
+  "name": "RhythmTraffic Website Chatbot",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "chat",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "webhook-chat",
+      "name": "Chat Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "webhookId": "chat-endpoint"
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "chat-history",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "webhook-history",
+      "name": "History Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 500],
+      "webhookId": "history-endpoint"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "key": "={{ 'chat_' + $json.body.sessionId }}"
+      },
+      "id": "get-chat-memory",
+      "name": "Get Chat Memory",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [450, 300],
+      "credentials": {
+        "redis": {
+          "id": "redis-creds",
+          "name": "Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse incoming message and prepare context\nconst userMessage = $('Chat Webhook').first().json.body.message;\nconst sessionId = $('Chat Webhook').first().json.body.sessionId;\nconst previousMessages = $('Get Chat Memory').first().json.data || [];\n\n// Parse previous messages if stored as string\nlet chatHistory = [];\ntry {\n  chatHistory = typeof previousMessages === 'string' \n    ? JSON.parse(previousMessages) \n    : previousMessages;\n} catch (e) {\n  chatHistory = [];\n}\n\n// Add user message to history\nchatHistory.push({\n  role: 'user',\n  content: userMessage,\n  timestamp: new Date().toISOString()\n});\n\nreturn {\n  userMessage,\n  sessionId,\n  chatHistory,\n  historyFormatted: chatHistory.map(m => `${m.role}: ${m.content}`).join('\\n')\n};"
+      },
+      "id": "prepare-context",
+      "name": "Prepare Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "operation": "text",
+        "text": "={{ $json.userMessage }}",
+        "options": {
+          "returnAll": true,
+          "limit": 5
+        }
+      },
+      "id": "vector-search",
+      "name": "Search Knowledge Base",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreRetriever",
+      "typeVersion": 1,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 1000
+        }
+      },
+      "id": "openai-chat",
+      "name": "AI Chat Response",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.5,
+      "position": [1050, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-creds",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "You are a friendly and knowledgeable technical sales assistant for RhythmTraffic (www.rhythmtraffic.com). Your role is to:\n\n1. PERSONALITY:\n- Be warm, approachable, and genuinely helpful\n- Use a conversational but professional tone\n- Show enthusiasm about helping solve the prospect's challenges\n- Be patient and thorough in explanations\n\n2. KNOWLEDGE:\n- You have access to RhythmTraffic's website content and technical documents\n- Use the provided context to give accurate, specific answers\n- If you don't have specific information, acknowledge it and offer to connect them with an engineer\n\n3. SALES APPROACH:\n- Listen to understand their needs before suggesting solutions\n- Ask clarifying questions to better understand their requirements\n- Highlight relevant features and benefits based on their specific situation\n- Share success stories or use cases when relevant\n\n4. BOOKING MEETINGS:\n- When the prospect shows interest or needs detailed technical discussion, proactively offer to book a meeting with an engineer\n- Use phrases like: \"I'd love to set up a quick call with one of our engineers to discuss this in more detail. Would that be helpful?\"\n- When they agree, collect: their name, email, preferred date/time, and brief description of what they'd like to discuss\n- Confirm the meeting details and let them know an engineer will reach out\n\n5. CONTEXT FROM KNOWLEDGE BASE:\n{{ $json.context }}\n\n6. CONVERSATION HISTORY:\n{{ $json.historyFormatted }}\n\n7. CURRENT USER MESSAGE:\n{{ $json.userMessage }}\n\nRespond naturally and helpfully. If they want to book a meeting, guide them through the process."
+      },
+      "id": "ai-prompt",
+      "name": "AI Prompt Template",
+      "type": "@n8n/n8n-nodes-langchain.prompt",
+      "typeVersion": 1,
+      "position": [1050, 450]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract meeting intent and details from AI response\nconst aiResponse = $('AI Chat Response').first().json.text;\nconst userMessage = $('Prepare Context').first().json.userMessage.toLowerCase();\nconst sessionId = $('Prepare Context').first().json.sessionId;\nlet chatHistory = $('Prepare Context').first().json.chatHistory;\n\n// Add AI response to history\nchatHistory.push({\n  role: 'assistant',\n  content: aiResponse,\n  timestamp: new Date().toISOString()\n});\n\n// Check for meeting booking intent\nconst meetingKeywords = ['book', 'schedule', 'meeting', 'call', 'appointment', 'demo', 'talk to engineer'];\nconst hasMeetingIntent = meetingKeywords.some(kw => userMessage.includes(kw));\n\n// Extract email if provided (simple regex)\nconst emailMatch = userMessage.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/);\nconst email = emailMatch ? emailMatch[0] : null;\n\nreturn {\n  response: aiResponse,\n  sessionId,\n  chatHistory,\n  hasMeetingIntent,\n  extractedEmail: email,\n  shouldTriggerBooking: hasMeetingIntent && email\n};"
+      },
+      "id": "process-response",
+      "name": "Process Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "={{ 'chat_' + $json.sessionId }}",
+        "value": "={{ JSON.stringify($json.chatHistory) }}",
+        "options": {
+          "expire": 86400
+        }
+      },
+      "id": "save-chat-memory",
+      "name": "Save Chat Memory",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [1450, 300],
+      "credentials": {
+        "redis": {
+          "id": "redis-creds",
+          "name": "Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, response: $json.response, sessionId: $json.sessionId, hasMeetingIntent: $json.hasMeetingIntent }) }}"
+      },
+      "id": "respond-chat",
+      "name": "Respond to Chat",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1650, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.shouldTriggerBooking }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "check-booking",
+      "name": "Check Booking Intent",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1450, 500]
+    },
+    {
+      "parameters": {
+        "resource": "event",
+        "operation": "create",
+        "calendarId": "primary",
+        "summary": "RhythmTraffic - Engineering Consultation",
+        "description": "Meeting booked via website chatbot.\n\nProspect Email: {{ $json.extractedEmail }}\n\nConversation Context:\n{{ $json.chatHistory.slice(-5).map(m => m.role + ': ' + m.content).join('\\n') }}",
+        "start": "={{ $now.plus(1, 'day').set({hour: 10, minute: 0}).toISO() }}",
+        "end": "={{ $now.plus(1, 'day').set({hour: 10, minute: 30}).toISO() }}",
+        "options": {
+          "attendees": ["{{ $json.extractedEmail }}"]
+        }
+      },
+      "id": "create-calendar-event",
+      "name": "Create Calendar Event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.2,
+      "position": [1650, 500],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "google-calendar-creds",
+          "name": "Google Calendar"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.extractedEmail }}",
+        "subject": "Your RhythmTraffic Engineering Consultation is Confirmed!",
+        "message": "Hi there!\n\nThank you for your interest in RhythmTraffic! Your meeting with one of our engineers has been scheduled.\n\nWe're excited to discuss your needs and explore how we can help you achieve your goals.\n\nIf you need to reschedule or have any questions before our call, please reply to this email.\n\nBest regards,\nThe RhythmTraffic Team\nwww.rhythmtraffic.com"
+      },
+      "id": "send-confirmation-email",
+      "name": "Send Confirmation Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1850, 500],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "gmail-creds",
+          "name": "Gmail"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Chat Webhook": {
+      "main": [
+        [
+          {
+            "node": "Get Chat Memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Chat Memory": {
+      "main": [
+        [
+          {
+            "node": "Prepare Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Context": {
+      "main": [
+        [
+          {
+            "node": "Search Knowledge Base",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Knowledge Base": {
+      "main": [
+        [
+          {
+            "node": "AI Chat Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Chat Response": {
+      "main": [
+        [
+          {
+            "node": "Process Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Response": {
+      "main": [
+        [
+          {
+            "node": "Save Chat Memory",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check Booking Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Chat Memory": {
+      "main": [
+        [
+          {
+            "node": "Respond to Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Booking Intent": {
+      "main": [
+        [
+          {
+            "node": "Create Calendar Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Calendar Event": {
+      "main": [
+        [
+          {
+            "node": "Send Confirmation Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "chatbot",
+      "id": "1"
+    },
+    {
+      "name": "sales",
+      "id": "2"
+    }
+  ],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}
