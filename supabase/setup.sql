@@ -169,25 +169,37 @@ create trigger meeting_requests_updated_at
   for each row execute function update_updated_at();
 
 -- =====================================================
--- 9. Row Level Security (RLS) - Optional but recommended
+-- 9. Row Level Security (RLS) - IMPORTANT
 -- =====================================================
--- Enable RLS
-alter table documents enable row level security;
-alter table chat_sessions enable row level security;
-alter table meeting_requests enable row level security;
+-- OPTION A: Disable RLS (simpler, use if n8n uses service_role key)
+-- If you use the service_role key in n8n, RLS is bypassed automatically.
+-- Just make sure NOT to expose the service_role key to the browser.
 
--- Create policies for service role (full access)
-create policy "Service role has full access to documents"
-  on documents for all
-  using (auth.role() = 'service_role');
+-- OPTION B: Enable RLS with policies (more secure)
+-- Uncomment below if you want RLS enabled:
 
-create policy "Service role has full access to chat_sessions"
-  on chat_sessions for all
-  using (auth.role() = 'service_role');
+-- alter table documents enable row level security;
+-- alter table chat_sessions enable row level security;
+-- alter table meeting_requests enable row level security;
 
-create policy "Service role has full access to meeting_requests"
-  on meeting_requests for all
-  using (auth.role() = 'service_role');
+-- Policy: Allow all operations for authenticated service role
+-- create policy "Service role full access - documents"
+--   on documents for all
+--   using (true)
+--   with check (true);
+
+-- create policy "Service role full access - chat_sessions"
+--   on chat_sessions for all
+--   using (true)
+--   with check (true);
+
+-- create policy "Service role full access - meeting_requests"
+--   on meeting_requests for all
+--   using (true)
+--   with check (true);
+
+-- NOTE: The service_role key bypasses RLS by default in Supabase.
+-- Only enable RLS if you plan to use anon key or have specific access control needs.
 
 -- =====================================================
 -- 10. Sample data (optional - remove in production)

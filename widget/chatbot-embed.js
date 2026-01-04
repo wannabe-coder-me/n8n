@@ -42,9 +42,14 @@ What can I assist you with today?`,
     const config = Object.assign({}, defaultConfig, window.RhythmTrafficConfig || {});
 
     // Try to get webhook from data attribute
-    const scriptTag = document.currentScript;
-    if (scriptTag && scriptTag.dataset.webhook) {
-        config.webhookUrl = scriptTag.dataset.webhook;
+    // Note: document.currentScript may be null if script is loaded async
+    try {
+        const scriptTag = document.currentScript;
+        if (scriptTag && scriptTag.dataset && scriptTag.dataset.webhook) {
+            config.webhookUrl = scriptTag.dataset.webhook;
+        }
+    } catch (e) {
+        // Ignore - use config from window.RhythmTrafficConfig instead
     }
 
     // Generate or retrieve session ID
@@ -466,12 +471,21 @@ What can I assist you with today?`,
         return new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
     }
 
+    // Sanitize HTML to prevent XSS attacks
+    function sanitizeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
     function addMessage(content, sender) {
         const messages = document.getElementById('rt-chat-messages');
         const msg = document.createElement('div');
         msg.className = `rt-msg ${sender}`;
 
-        const formatted = content
+        // Sanitize content first, then apply safe formatting
+        const sanitized = sanitizeHtml(content);
+        const formatted = sanitized
             .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
             .replace(/\*(.*?)\*/g, '<em>$1</em>')
             .replace(/\n/g, '<br>');

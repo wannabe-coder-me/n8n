@@ -31,6 +31,10 @@
               "value": "={{ $env.SUPABASE_KEY }}"
             },
             {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_KEY }}"
+            },
+            {
               "name": "Content-Type",
               "value": "application/json"
             }
@@ -38,17 +42,18 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={ \"session_id\": \"{{ $json.body.sessionId }}\" }"
+        "jsonBody": "={{ JSON.stringify({ session_id: $json.body.sessionId }) }}"
       },
       "id": "get-session",
       "name": "Get Chat Session",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [450, 300]
+      "position": [450, 300],
+      "continueOnFail": true
     },
     {
       "parameters": {
-        "jsCode": "// Parse incoming message and prepare context\nconst body = $('Chat Webhook').first().json.body;\nconst userMessage = body.message;\nconst sessionId = body.sessionId;\nconst pageUrl = body.pageUrl || '';\nconst pageTitle = body.pageTitle || '';\n\n// Get previous messages from Supabase response\nlet chatHistory = [];\nlet ghlContactId = null;\ntry {\n  const sessionData = $('Get Chat Session').first().json;\n  if (sessionData && sessionData.messages) {\n    chatHistory = typeof sessionData.messages === 'string' \n      ? JSON.parse(sessionData.messages) \n      : sessionData.messages;\n  }\n  if (sessionData && sessionData.metadata) {\n    ghlContactId = sessionData.metadata.ghl_contact_id || null;\n  }\n} catch (e) {\n  chatHistory = [];\n}\n\n// Add user message to history\nchatHistory.push({\n  role: 'user',\n  content: userMessage,\n  timestamp: new Date().toISOString()\n});\n\n// Extract contact info from message\nconst emailMatch = userMessage.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/);\nconst phoneMatch = userMessage.match(/(?:\\+?1[-.]?)?\\(?[0-9]{3}\\)?[-.]?[0-9]{3}[-.]?[0-9]{4}/);\nconst nameMatch = userMessage.match(/(?:my name is|i'm|i am|this is)\\s+([A-Z][a-z]+(?:\\s+[A-Z][a-z]+)?)/i);\n\nreturn {\n  userMessage,\n  sessionId,\n  pageUrl,\n  pageTitle,\n  chatHistory,\n  ghlContactId,\n  extractedEmail: emailMatch ? emailMatch[0] : null,\n  extractedPhone: phoneMatch ? phoneMatch[0] : null,\n  extractedName: nameMatch ? nameMatch[1] : null,\n  historyFormatted: chatHistory.slice(-10).map(m => `${m.role}: ${m.content}`).join('\\n')\n};"
+        "jsCode": "// Parse incoming message and prepare context\nconst body = $('Chat Webhook').first().json.body;\nconst userMessage = body.message || '';\nconst sessionId = body.sessionId || '';\nconst pageUrl = body.pageUrl || '';\nconst pageTitle = body.pageTitle || '';\n\n// Validate required fields\nif (!userMessage || !sessionId) {\n  throw new Error('Missing required fields: message and sessionId');\n}\n\n// Get previous messages from Supabase response\nlet chatHistory = [];\nlet ghlContactId = null;\ntry {\n  const sessionResponse = $('Get Chat Session').first().json;\n  // Handle both direct response and wrapped response\n  const sessionData = sessionResponse || {};\n  \n  if (sessionData && sessionData.messages) {\n    chatHistory = typeof sessionData.messages === 'string' \n      ? JSON.parse(sessionData.messages) \n      : (Array.isArray(sessionData.messages) ? sessionData.messages : []);\n  }\n  if (sessionData && sessionData.metadata) {\n    const metadata = typeof sessionData.metadata === 'string'\n      ? JSON.parse(sessionData.metadata)\n      : sessionData.metadata;\n    ghlContactId = metadata.ghl_contact_id || null;\n  }\n} catch (e) {\n  // New session or error - start fresh\n  chatHistory = [];\n}\n\n// Add user message to history\nchatHistory.push({\n  role: 'user',\n  content: userMessage,\n  timestamp: new Date().toISOString()\n});\n\n// Extract contact info from message\nconst emailMatch = userMessage.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/);\nconst phoneMatch = userMessage.match(/(?:\\+?1[-.]?)?\\(?[0-9]{3}\\)?[-.]?[0-9]{3}[-.]?[0-9]{4}/);\nconst nameMatch = userMessage.match(/(?:my name is|i'm|i am|this is)\\s+([A-Z][a-z]+(?:\\s+[A-Z][a-z]+)?)/i);\n\nreturn {\n  userMessage,\n  sessionId,\n  pageUrl,\n  pageTitle,\n  chatHistory,\n  ghlContactId,\n  extractedEmail: emailMatch ? emailMatch[0] : null,\n  extractedPhone: phoneMatch ? phoneMatch[0] : null,\n  extractedName: nameMatch ? nameMatch[1] : null,\n  historyFormatted: chatHistory.slice(-10).map(m => m.role + ': ' + m.content).join('\\n')\n};"
       },
       "id": "prepare-context",
       "name": "Prepare Context",
@@ -58,20 +63,44 @@
     },
     {
       "parameters": {
-        "model": "text-embedding-3-small",
-        "options": {}
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'text-embedding-3-small', input: $json.userMessage }) }}"
       },
       "id": "create-query-embedding",
       "name": "Create Query Embedding",
-      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
-      "typeVersion": 1,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [850, 300],
       "credentials": {
-        "openAiApi": {
-          "id": "openai-creds",
-          "name": "OpenAI API"
+        "httpHeaderAuth": {
+          "id": "openai-header-creds",
+          "name": "OpenAI Header Auth"
         }
       }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract embedding from OpenAI response\nconst embeddingResponse = $json;\nconst preparedData = $('Prepare Context').first().json;\n\nlet embedding = null;\nif (embeddingResponse && embeddingResponse.data && embeddingResponse.data[0]) {\n  embedding = embeddingResponse.data[0].embedding;\n}\n\nif (!embedding) {\n  // If embedding fails, continue without vector search\n  return {\n    ...preparedData,\n    embedding: null,\n    skipVectorSearch: true\n  };\n}\n\nreturn {\n  ...preparedData,\n  embedding,\n  skipVectorSearch: false\n};"
+      },
+      "id": "extract-embedding",
+      "name": "Extract Embedding",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300]
     },
     {
       "parameters": {
@@ -87,6 +116,10 @@
               "value": "={{ $env.SUPABASE_KEY }}"
             },
             {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_KEY }}"
+            },
+            {
               "name": "Content-Type",
               "value": "application/json"
             }
@@ -94,82 +127,93 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"query_embedding\": {{ JSON.stringify($json.embedding) }},\n  \"match_count\": 5\n}"
+        "jsonBody": "={{ JSON.stringify({ query_embedding: $json.embedding, match_count: 5 }) }}"
       },
       "id": "vector-search",
       "name": "Search Knowledge Base",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1050, 300]
+      "position": [1250, 300],
+      "continueOnFail": true
     },
     {
       "parameters": {
-        "jsCode": "// Combine search results into context\nconst searchResults = $json;\nconst preparedData = $('Prepare Context').first().json;\n\nlet context = '';\nif (Array.isArray(searchResults) && searchResults.length > 0) {\n  context = searchResults\n    .filter(r => r.similarity > 0.7)\n    .map(r => r.content)\n    .join('\\n\\n---\\n\\n');\n}\n\nreturn {\n  ...preparedData,\n  context: context || 'No specific context found. Use general knowledge about RhythmTraffic services.'\n};"
+        "jsCode": "// Combine search results into context\nconst searchResponse = $json;\nconst preparedData = $('Extract Embedding').first().json;\n\nlet context = '';\n\n// Handle vector search results\nif (Array.isArray(searchResponse) && searchResponse.length > 0) {\n  const relevantDocs = searchResponse.filter(r => r && r.similarity && r.similarity > 0.65);\n  if (relevantDocs.length > 0) {\n    context = relevantDocs.map(r => r.content).join('\\n\\n---\\n\\n');\n  }\n}\n\n// Fallback context if no results\nif (!context) {\n  context = 'No specific documentation found. Respond based on general knowledge about RhythmTraffic as a professional traffic solutions company. Be helpful and offer to connect them with an engineer for detailed questions.';\n}\n\nreturn {\n  userMessage: preparedData.userMessage,\n  sessionId: preparedData.sessionId,\n  chatHistory: preparedData.chatHistory,\n  ghlContactId: preparedData.ghlContactId,\n  extractedEmail: preparedData.extractedEmail,\n  extractedPhone: preparedData.extractedPhone,\n  extractedName: preparedData.extractedName,\n  historyFormatted: preparedData.historyFormatted,\n  context\n};"
       },
       "id": "combine-context",
       "name": "Combine Context",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1250, 300]
+      "position": [1450, 300]
     },
     {
       "parameters": {
-        "model": "gpt-4o-mini",
-        "messages": {
-          "values": [
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
             {
-              "role": "system",
-              "content": "You are a friendly and knowledgeable technical sales assistant for RhythmTraffic (www.rhythmtraffic.com). \n\nYOUR PERSONALITY:\n- Warm, approachable, and genuinely helpful\n- Conversational but professional\n- Enthusiastic about solving challenges\n- Patient and thorough\n\nYOUR GOALS:\n1. Answer questions about RhythmTraffic's services using the knowledge base\n2. Understand the prospect's needs through conversation\n3. Collect contact info naturally when appropriate\n4. Book meetings with engineers when they show interest\n\nCOLLECTING CONTACT INFO:\n- When someone seems interested, naturally ask for their email\n- Say things like: \"I'd love to send you more details - what's the best email to reach you?\"\n- If they want a meeting: \"Great! I'll set that up. Can I get your name and email?\"\n- Don't be pushy - wait for the right moment\n\nBOOKING MEETINGS:\n- When they provide email and want to talk to an engineer, confirm you'll set it up\n- Say: \"I've got that scheduled. One of our engineers will reach out to confirm the time.\"\n\nKEEP RESPONSES:\n- Concise (2-4 sentences usually)\n- Friendly and helpful\n- Focused on their needs"
-            },
-            {
-              "role": "user",
-              "content": "=KNOWLEDGE BASE:\n{{ $json.context }}\n\nCONVERSATION:\n{{ $json.historyFormatted }}\n\nCURRENT MESSAGE:\n{{ $json.userMessage }}"
+              "name": "Content-Type",
+              "value": "application/json"
             }
           ]
         },
-        "options": {
-          "temperature": 0.7,
-          "maxTokens": 600
-        }
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'gpt-4o-mini', messages: [ { role: 'system', content: 'You are a friendly and knowledgeable technical sales assistant for RhythmTraffic (www.rhythmtraffic.com).\\n\\nYOUR PERSONALITY:\\n- Warm, approachable, and genuinely helpful\\n- Conversational but professional\\n- Enthusiastic about solving challenges\\n- Patient and thorough\\n\\nYOUR GOALS:\\n1. Answer questions about RhythmTraffic services using the knowledge base\\n2. Understand the prospect needs through conversation\\n3. Collect contact info naturally when appropriate\\n4. Book meetings with engineers when they show interest\\n\\nCOLLECTING CONTACT INFO:\\n- When someone seems interested, naturally ask for their email\\n- Say things like: \"I would love to send you more details - what is the best email to reach you?\"\\n- If they want a meeting: \"Great! I will set that up. Can I get your name and email?\"\\n- Do not be pushy - wait for the right moment\\n\\nBOOKING MEETINGS:\\n- When they provide email and want to talk to an engineer, confirm you will set it up\\n- Say: \"I have got that scheduled. One of our engineers will reach out to confirm the time.\"\\n\\nKEEP RESPONSES:\\n- Concise (2-4 sentences usually)\\n- Friendly and helpful\\n- Focused on their needs' }, { role: 'user', content: 'KNOWLEDGE BASE:\\n' + $json.context + '\\n\\nCONVERSATION:\\n' + $json.historyFormatted + '\\n\\nCURRENT MESSAGE:\\n' + $json.userMessage } ], temperature: 0.7, max_tokens: 600 }) }}"
       },
       "id": "openai-chat",
       "name": "AI Chat Response",
-      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
-      "typeVersion": 1,
-      "position": [1450, 300],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1650, 300],
       "credentials": {
-        "openAiApi": {
-          "id": "openai-creds",
-          "name": "OpenAI API"
+        "httpHeaderAuth": {
+          "id": "openai-header-creds",
+          "name": "OpenAI Header Auth"
         }
       }
     },
     {
       "parameters": {
-        "jsCode": "// Process AI response and check for lead capture\nconst aiResponse = $json.text || $json.content || $json.message?.content || '';\nconst preparedData = $('Combine Context').first().json;\nlet chatHistory = preparedData.chatHistory;\n\n// Add AI response to history\nchatHistory.push({\n  role: 'assistant',\n  content: aiResponse,\n  timestamp: new Date().toISOString()\n});\n\n// Check for meeting/booking intent\nconst userMessage = preparedData.userMessage.toLowerCase();\nconst meetingKeywords = ['book', 'schedule', 'meeting', 'call', 'appointment', 'demo', 'talk to', 'speak with', 'engineer', 'consultation'];\nconst hasMeetingIntent = meetingKeywords.some(kw => userMessage.includes(kw));\n\n// Determine if we should send to GHL\nconst hasNewContactInfo = preparedData.extractedEmail || preparedData.extractedPhone;\nconst shouldCreateGhlContact = hasNewContactInfo && !preparedData.ghlContactId;\nconst shouldUpdateGhlContact = hasNewContactInfo && preparedData.ghlContactId;\nconst shouldBookMeeting = hasMeetingIntent && preparedData.extractedEmail;\n\nreturn {\n  response: aiResponse,\n  sessionId: preparedData.sessionId,\n  chatHistory,\n  ghlContactId: preparedData.ghlContactId,\n  \n  // Contact info\n  extractedEmail: preparedData.extractedEmail,\n  extractedPhone: preparedData.extractedPhone,\n  extractedName: preparedData.extractedName,\n  \n  // Flags for GHL integration\n  shouldCreateGhlContact,\n  shouldUpdateGhlContact,\n  shouldBookMeeting,\n  hasMeetingIntent,\n  \n  // Context for GHL\n  conversationSummary: chatHistory.slice(-5).map(m => `${m.role}: ${m.content}`).join('\\n')\n};"
+        "jsCode": "// Process AI response and check for lead capture\nconst openaiResponse = $json;\nconst preparedData = $('Combine Context').first().json;\n\n// Extract AI response text\nlet aiResponse = '';\nif (openaiResponse && openaiResponse.choices && openaiResponse.choices[0]) {\n  aiResponse = openaiResponse.choices[0].message?.content || '';\n}\n\nif (!aiResponse) {\n  aiResponse = 'I apologize, but I encountered an issue. Please try again or contact us directly.';\n}\n\nlet chatHistory = preparedData.chatHistory || [];\n\n// Add AI response to history\nchatHistory.push({\n  role: 'assistant',\n  content: aiResponse,\n  timestamp: new Date().toISOString()\n});\n\n// Check for meeting/booking intent\nconst userMessage = (preparedData.userMessage || '').toLowerCase();\nconst meetingKeywords = ['book', 'schedule', 'meeting', 'call', 'appointment', 'demo', 'talk to', 'speak with', 'engineer', 'consultation'];\nconst hasMeetingIntent = meetingKeywords.some(kw => userMessage.includes(kw));\n\n// Determine if we should send to GHL\nconst hasNewContactInfo = preparedData.extractedEmail || preparedData.extractedPhone;\nconst shouldCreateGhlContact = !!(hasNewContactInfo && !preparedData.ghlContactId);\nconst shouldBookMeeting = !!(hasMeetingIntent && preparedData.extractedEmail);\n\nreturn {\n  response: aiResponse,\n  sessionId: preparedData.sessionId,\n  chatHistory,\n  ghlContactId: preparedData.ghlContactId || null,\n  \n  // Contact info\n  extractedEmail: preparedData.extractedEmail || null,\n  extractedPhone: preparedData.extractedPhone || null,\n  extractedName: preparedData.extractedName || null,\n  \n  // Flags for GHL integration\n  shouldCreateGhlContact,\n  shouldBookMeeting,\n  hasMeetingIntent,\n  \n  // Context for GHL\n  conversationSummary: chatHistory.slice(-5).map(m => m.role + ': ' + m.content).join('\\n')\n};"
       },
       "id": "process-response",
       "name": "Process Response",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1650, 300]
+      "position": [1850, 300]
     },
     {
       "parameters": {
         "conditions": {
-          "boolean": [
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
             {
-              "value1": "={{ $json.shouldCreateGhlContact }}",
-              "value2": true
+              "id": "check-create",
+              "leftValue": "={{ $json.shouldCreateGhlContact }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
             }
-          ]
+          ],
+          "combinator": "and"
         }
       },
       "id": "check-create-contact",
       "name": "New Contact?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [1850, 450]
+      "position": [2050, 450]
     },
     {
       "parameters": {
@@ -192,36 +236,48 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"locationId\": \"{{ $env.GHL_LOCATION_ID }}\",\n  \"email\": \"{{ $json.extractedEmail }}\",\n  \"phone\": \"{{ $json.extractedPhone || '' }}\",\n  \"name\": \"{{ $json.extractedName || 'Website Visitor' }}\",\n  \"source\": \"Website Chatbot\",\n  \"tags\": [\"chatbot-lead\", \"website\"],\n  \"customFields\": [\n    {\n      \"key\": \"chatbot_session_id\",\n      \"value\": \"{{ $json.sessionId }}\"\n    },\n    {\n      \"key\": \"first_interaction\",\n      \"value\": \"{{ $now.toISO() }}\"\n    }\n  ]\n}"
+        "jsonBody": "={{ JSON.stringify({ locationId: $env.GHL_LOCATION_ID, email: $json.extractedEmail || '', phone: $json.extractedPhone || '', name: $json.extractedName || 'Website Visitor', source: 'Website Chatbot', tags: ['chatbot-lead', 'website'] }) }}"
       },
       "id": "create-ghl-contact",
       "name": "Create GHL Contact",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2050, 400],
+      "position": [2250, 400],
       "credentials": {
         "httpHeaderAuth": {
           "id": "ghl-api-creds",
           "name": "GHL API Key"
         }
-      }
+      },
+      "continueOnFail": true
     },
     {
       "parameters": {
         "conditions": {
-          "boolean": [
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
             {
-              "value1": "={{ $('Process Response').first().json.shouldBookMeeting }}",
-              "value2": true
+              "id": "check-booking",
+              "leftValue": "={{ $('Process Response').first().json.shouldBookMeeting }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
             }
-          ]
+          ],
+          "combinator": "and"
         }
       },
       "id": "check-book-meeting",
       "name": "Book Meeting?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [2250, 400]
+      "position": [2450, 400]
     },
     {
       "parameters": {
@@ -244,45 +300,10 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"calendarId\": \"{{ $env.GHL_CALENDAR_ID }}\",\n  \"locationId\": \"{{ $env.GHL_LOCATION_ID }}\",\n  \"contactId\": \"{{ $json.contact?.id || $('Process Response').first().json.ghlContactId }}\",\n  \"startTime\": \"{{ $now.plus(1, 'day').set({hour: 10, minute: 0}).toISO() }}\",\n  \"endTime\": \"{{ $now.plus(1, 'day').set({hour: 10, minute: 30}).toISO() }}\",\n  \"title\": \"RhythmTraffic - Engineering Consultation\",\n  \"appointmentStatus\": \"confirmed\",\n  \"assignedUserId\": \"{{ $env.GHL_ENGINEER_USER_ID }}\",\n  \"notes\": \"Booked via website chatbot.\\n\\nConversation:\\n{{ $('Process Response').first().json.conversationSummary }}\"\n}"
+        "jsonBody": "={{ JSON.stringify({ calendarId: $env.GHL_CALENDAR_ID, locationId: $env.GHL_LOCATION_ID, contactId: $json.id || $json.contact?.id || $('Process Response').first().json.ghlContactId || '', startTime: $now.plus(1, 'day').set({hour: 10, minute: 0}).toISO(), endTime: $now.plus(1, 'day').set({hour: 10, minute: 30}).toISO(), title: 'RhythmTraffic - Engineering Consultation', appointmentStatus: 'confirmed', assignedUserId: $env.GHL_ENGINEER_USER_ID || '', notes: 'Booked via website chatbot' }) }}"
       },
       "id": "create-ghl-appointment",
       "name": "Book GHL Appointment",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [2450, 400],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "ghl-api-creds",
-          "name": "GHL API Key"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "https://services.leadconnectorhq.com/conversations/messages",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            },
-            {
-              "name": "Version",
-              "value": "2021-07-28"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"type\": \"Email\",\n  \"contactId\": \"{{ $json.contact?.id || $('Process Response').first().json.ghlContactId }}\",\n  \"message\": \"New meeting booked via website chatbot! Please reach out to confirm the time.\"\n}"
-      },
-      "id": "notify-ghl",
-      "name": "Add GHL Note",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [2650, 400],
@@ -308,6 +329,10 @@
               "value": "={{ $env.SUPABASE_KEY }}"
             },
             {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_KEY }}"
+            },
+            {
               "name": "Content-Type",
               "value": "application/json"
             },
@@ -319,13 +344,14 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"id\": \"{{ $('Process Response').first().json.sessionId }}\",\n  \"messages\": {{ JSON.stringify($('Process Response').first().json.chatHistory) }},\n  \"metadata\": {\n    \"ghl_contact_id\": \"{{ $json.contact?.id || $('Process Response').first().json.ghlContactId || '' }}\",\n    \"email\": \"{{ $('Process Response').first().json.extractedEmail || '' }}\"\n  },\n  \"updated_at\": \"{{ $now.toISO() }}\"\n}"
+        "jsonBody": "={{ JSON.stringify({ id: $('Process Response').first().json.sessionId, messages: $('Process Response').first().json.chatHistory, metadata: { ghl_contact_id: $('Process Response').first().json.ghlContactId || '', email: $('Process Response').first().json.extractedEmail || '' }, updated_at: $now.toISO() }) }}"
       },
       "id": "save-session",
       "name": "Save Chat Session",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1850, 300]
+      "position": [2050, 300],
+      "continueOnFail": true
     },
     {
       "parameters": {
@@ -336,7 +362,7 @@
       "name": "Respond to Chat",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [2050, 300]
+      "position": [2250, 300]
     }
   ],
   "connections": {
@@ -374,6 +400,17 @@
       ]
     },
     "Create Query Embedding": {
+      "main": [
+        [
+          {
+            "node": "Extract Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Embedding": {
       "main": [
         [
           {
@@ -471,17 +508,6 @@
         [
           {
             "node": "Book GHL Appointment",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Book GHL Appointment": {
-      "main": [
-        [
-          {
-            "node": "Add GHL Note",
             "type": "main",
             "index": 0
           }

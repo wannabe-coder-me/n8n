@@ -121,14 +121,17 @@ docker run -it --rm \
 
 Go to **Settings > Credentials** and add:
 
-1. **OpenAI API**
-   - Name: `OpenAI API`
-   - API Key: Your key from platform.openai.com
+1. **OpenAI Header Auth** (Header Auth type)
+   - Name: `OpenAI Header Auth`
+   - Header Name: `Authorization`
+   - Header Value: `Bearer YOUR_OPENAI_API_KEY`
 
 2. **GHL API Key** (Header Auth type)
    - Name: `GHL API Key`
    - Header Name: `Authorization`
    - Header Value: `Bearer YOUR_GHL_API_KEY`
+
+**Important:** Use `service_role` key for Supabase (not anon key) - set as environment variables.
 
 ### Step 4: Import the Workflow
 
