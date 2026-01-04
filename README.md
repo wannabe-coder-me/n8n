@@ -7,12 +7,101 @@ A complete AI-powered chatbot solution for **www.rhythmtraffic.com** that:
 - Acts as a friendly technical salesperson
 - Books meetings with engineers
 
-## Architecture Overview
+## Choose Your Setup
+
+| Option | Best For | Chat Widget | CRM | Calendar |
+|--------|----------|-------------|-----|----------|
+| **GoHighLevel (GHL)** | All-in-one marketing | GHL Built-in | GHL CRM | GHL Calendar |
+| **Custom Widget + n8n** | Full customization | Custom JS | Any CRM | Google/Calendly |
+
+---
+
+## Option 1: GoHighLevel (GHL) Setup
+
+If you're using GoHighLevel, this is the easiest path - GHL already has a chat widget, CRM, and calendar built in.
+
+### Architecture with GHL
 
 ```
 +------------------+     +------------------+     +------------------+
 |                  |     |                  |     |                  |
-|  Website Widget  +---->+   n8n Webhook    +---->+   AI Processing  |
+|  GHL Chat Widget +---->+   n8n + AI       +---->+   GHL CRM        |
+|  (Built-in)      |     |   (Processing)   |     |   + Calendar     |
+|                  |     |                  |     |                  |
++------------------+     +--------+---------+     +------------------+
+                                  |
+                                  v
+                         +--------+---------+
+                         |                  |
+                         |  Supabase        |
+                         |  (Knowledge)     |
+                         |                  |
+                         +------------------+
+```
+
+### Step 1: Get Your GHL API Key
+
+1. Log into GoHighLevel
+2. Go to **Settings** > **Business Profile** > **API Keys**
+3. Create a new API key with these permissions:
+   - Conversations (Read/Write)
+   - Contacts (Read/Write)
+   - Calendars (Read/Write)
+   - Appointments (Read/Write)
+4. Copy the API key
+
+### Step 2: Set Up n8n Credentials
+
+In n8n, go to **Settings > Credentials** and add:
+
+1. **GHL API Key** (Header Auth)
+   - Name: `GHL API Key`
+   - Name: `Authorization`
+   - Value: `Bearer YOUR_GHL_API_KEY`
+
+2. **OpenAI API**
+   - Name: `OpenAI API`
+   - API Key: Your OpenAI API key
+
+3. **Supabase** (for knowledge base)
+   - Name: `Supabase API`
+   - Host: Your Supabase URL
+   - API Key: Your Supabase service role key
+
+### Step 3: Import GHL Workflow
+
+1. Import `workflows/ghl-chatbot-workflow.json` into n8n
+2. Update these values in the workflow:
+   - `YOUR_GHL_CALENDAR_ID` - Your GHL calendar ID
+   - `YOUR_ENGINEER_USER_ID` - The GHL user ID for your engineer
+
+### Step 4: Configure GHL Webhook
+
+1. In GHL, go to **Automation** > **Webhooks**
+2. Create a new webhook:
+   - **Trigger**: Inbound Message
+   - **URL**: `https://your-n8n.com/webhook/ghl-chat`
+3. Enable the webhook
+
+### Step 5: Set Up GHL Chat Widget
+
+1. In GHL, go to **Sites** > **Chat Widget**
+2. Customize the appearance to match RhythmTraffic branding
+3. Enable on all your funnels/websites
+4. The widget is now AI-powered through n8n!
+
+---
+
+## Option 2: Custom Widget Setup
+
+Use this if you want full control over the chat experience or don't use GHL.
+
+### Architecture (Custom)
+
+```
++------------------+     +------------------+     +------------------+
+|                  |     |                  |     |                  |
+|  Custom Widget   +---->+   n8n Webhook    +---->+   AI Processing  |
 |  (JavaScript)    |     |   (Chat API)     |     |   (OpenAI)       |
 |                  |     |                  |     |                  |
 +------------------+     +--------+---------+     +--------+---------+
@@ -20,25 +109,18 @@ A complete AI-powered chatbot solution for **www.rhythmtraffic.com** that:
                                   v                        v
                          +--------+---------+     +--------+---------+
                          |                  |     |                  |
-                         |  Vector Store    |     |  Calendar/Email  |
+                         |  Supabase        |     |  Google Calendar |
                          |  (Knowledge)     |     |  (Booking)       |
                          |                  |     |                  |
                          +------------------+     +------------------+
 ```
 
-## Quick Start
-
 ### Prerequisites
 
 - **n8n** (self-hosted or cloud) - [Install Guide](https://docs.n8n.io/hosting/)
 - **OpenAI API Key** - [Get one here](https://platform.openai.com/api-keys)
-- **Vector Database** (choose one):
-  - Pinecone (recommended, free tier available)
-  - Qdrant (self-hosted option)
-  - Supabase with pgvector
-- **Redis** (for chat memory) - or use n8n's built-in memory
+- **Supabase** (you already have this!)
 - **Google Calendar** (for meeting booking)
-- **Gmail or SMTP** (for confirmation emails)
 
 ### Step 1: Install n8n
 
@@ -57,7 +139,66 @@ n8n start
 
 Access n8n at: `http://localhost:5678`
 
-### Step 2: Set Up Credentials
+### Step 2: Set Up Supabase for Vector Storage
+
+Since you already have Supabase, enable pgvector:
+
+```sql
+-- Run this in Supabase SQL Editor
+
+-- Enable the pgvector extension
+create extension if not exists vector;
+
+-- Create the documents table for knowledge base
+create table documents (
+  id bigserial primary key,
+  content text,
+  metadata jsonb,
+  embedding vector(1536)
+);
+
+-- Create index for fast similarity search
+create index on documents using ivfflat (embedding vector_cosine_ops)
+  with (lists = 100);
+
+-- Create function for similarity search
+create or replace function match_documents (
+  query_embedding vector(1536),
+  match_count int default 5,
+  filter jsonb default '{}'
+)
+returns table (
+  id bigint,
+  content text,
+  metadata jsonb,
+  similarity float
+)
+language plpgsql
+as $$
+begin
+  return query
+  select
+    documents.id,
+    documents.content,
+    documents.metadata,
+    1 - (documents.embedding <=> query_embedding) as similarity
+  from documents
+  where documents.metadata @> filter
+  order by documents.embedding <=> query_embedding
+  limit match_count;
+end;
+$$;
+
+-- Create chat_sessions table for memory
+create table chat_sessions (
+  id text primary key,
+  messages jsonb default '[]'::jsonb,
+  created_at timestamp with time zone default now(),
+  updated_at timestamp with time zone default now()
+);
+```
+
+### Step 3: Set Up n8n Credentials
 
 In n8n, go to **Settings > Credentials** and add:
 
@@ -65,186 +206,126 @@ In n8n, go to **Settings > Credentials** and add:
    - Name: `OpenAI API`
    - API Key: Your OpenAI API key
 
-2. **Pinecone** (or your chosen vector DB)
-   - Name: `Pinecone API`
-   - API Key: Your Pinecone API key
-   - Environment: Your Pinecone environment
+2. **Supabase API**
+   - Name: `Supabase API`
+   - Host: `https://YOUR_PROJECT.supabase.co`
+   - Service Role Key: Your Supabase service role key
 
-3. **Redis**
-   - Name: `Redis`
-   - Host: `localhost` (or your Redis host)
-   - Port: `6379`
-
-4. **Google Calendar OAuth2**
+3. **Google Calendar OAuth2** (optional, for meeting booking)
    - Follow n8n's OAuth setup for Google Calendar
 
-5. **Gmail OAuth2**
-   - Follow n8n's OAuth setup for Gmail
+### Step 4: Import Workflows
 
-### Step 3: Import Workflows
-
-Import the following workflow files in n8n:
+Import these workflow files in n8n:
 
 1. **Main Chatbot**: `workflows/chatbot-workflow.json`
 2. **Document Ingestion**: `workflows/document-ingestion-workflow.json`
 3. **Website Scraper**: `workflows/website-scraper-workflow.json`
 
-To import:
-1. Click **Workflows** > **Import from File**
-2. Select each JSON file
-3. Update credential references to match your credentials
+**Important**: Update the workflows to use Supabase instead of Pinecone:
+- Replace Pinecone nodes with Supabase nodes
+- Use the `match_documents` function for similarity search
 
-### Step 4: Configure the Widget
+### Step 5: Embed the Widget
 
-1. Open `widget/chatbot-embed.js`
-2. Update the webhook URL:
-
-```javascript
-window.RhythmTrafficConfig = {
-    webhookUrl: 'https://your-n8n-instance.com/webhook/chat',
-    primaryColor: '#2563eb',  // Customize your brand color
-    companyName: 'RhythmTraffic'
-};
-```
-
-3. Host the widget file on your server or CDN
-
-### Step 5: Embed on Your Website
-
-Add this code just before `</body>` on every page:
+Add this code just before `</body>` on every page of rhythmtraffic.com:
 
 ```html
 <!-- RhythmTraffic Chatbot -->
 <script>
   window.RhythmTrafficConfig = {
-    webhookUrl: 'https://your-n8n-instance.com/webhook/chat'
+    webhookUrl: 'https://your-n8n-instance.com/webhook/chat',
+    primaryColor: '#2563eb',
+    companyName: 'RhythmTraffic'
   };
 </script>
 <script src="https://your-cdn.com/chatbot-embed.js"></script>
 ```
 
-### Step 6: Ingest Your Content
+---
 
-1. **Website Content**: Run the Website Scraper workflow
-   - Click "Execute Workflow" in n8n
-   - Or call: `POST https://your-n8n-instance.com/webhook/scrape-website`
+## Ingesting Your Content
 
-2. **Documents**: Place PDFs/Word docs in your documents folder
-   - Run the Document Ingestion workflow
-   - Or call: `POST https://your-n8n-instance.com/webhook/ingest-documents`
+### Website Content
+
+Run the Website Scraper workflow to index rhythmtraffic.com:
+
+```bash
+# Trigger manually
+curl -X POST https://your-n8n.com/webhook/scrape-website
+```
+
+Or click "Execute Workflow" in n8n.
+
+### Documents (PDFs, Word files)
+
+1. Upload documents to a folder accessible by n8n
+2. Update the folder path in the Document Ingestion workflow
+3. Run the workflow:
+
+```bash
+curl -X POST https://your-n8n.com/webhook/ingest-documents
+```
 
 ---
 
-## Detailed Configuration
+## Customizing the AI Personality
 
-### Customizing the AI Personality
-
-Edit the AI prompt in `chatbot-workflow.json`:
+Edit the AI prompt in the workflow to adjust the chatbot's behavior:
 
 ```
 You are a friendly and knowledgeable technical sales assistant for RhythmTraffic...
 ```
 
-Key personality traits to customize:
-- Greeting style
-- Technical depth
-- Sales approach
-- Meeting booking behavior
-
-### Adding More Website Pages
-
-Edit the `Define Pages to Scrape` node in the Website Scraper workflow:
-
-```javascript
-const pages = [
-  { url: baseUrl, name: 'Home' },
-  { url: `${baseUrl}/about`, name: 'About Us' },
-  // Add more pages here
-  { url: `${baseUrl}/your-new-page`, name: 'New Page' }
-];
-```
-
-### Vector Database Alternatives
-
-**Using Qdrant (Self-Hosted):**
-```bash
-docker run -p 6333:6333 qdrant/qdrant
-```
-Replace Pinecone nodes with Qdrant nodes in the workflows.
-
-**Using Supabase:**
-1. Enable pgvector extension in Supabase
-2. Use the Supabase Vector Store node
-
-### Memory Options
-
-**Using n8n Memory (Simpler):**
-Replace Redis nodes with n8n's built-in Memory nodes for smaller deployments.
-
-**Using PostgreSQL:**
-Store chat history in PostgreSQL for better persistence.
+Key traits to customize:
+- **Greeting style** - How warm/formal to be
+- **Technical depth** - How detailed explanations should be
+- **Sales approach** - Consultative vs. direct
+- **Meeting booking** - When to offer meetings
 
 ---
 
-## Meeting Booking Setup
+## Supabase Alternative for Chat Memory
 
-### Google Calendar Integration
-
-1. Create a Google Cloud project
-2. Enable Google Calendar API
-3. Create OAuth2 credentials
-4. Add redirect URL: `https://your-n8n.com/rest/oauth2-credential/callback`
-5. Configure in n8n credentials
-
-### Calendly Alternative
-
-Replace the Google Calendar node with a Calendly webhook:
+Instead of Redis, use Supabase for chat memory:
 
 ```javascript
-// In the booking flow, call Calendly's API
-const calendlyResponse = await fetch('https://calendly.com/api/v2/scheduling_links', {
-  method: 'POST',
-  headers: {
-    'Authorization': `Bearer ${calendlyToken}`,
-    'Content-Type': 'application/json'
-  },
-  body: JSON.stringify({
-    owner: 'https://api.calendly.com/users/YOUR_USER_ID',
-    max_event_count: 1
-  })
-});
+// Save chat history to Supabase
+const { data, error } = await supabase
+  .from('chat_sessions')
+  .upsert({
+    id: sessionId,
+    messages: chatHistory,
+    updated_at: new Date().toISOString()
+  });
+
+// Retrieve chat history
+const { data: session } = await supabase
+  .from('chat_sessions')
+  .select('messages')
+  .eq('id', sessionId)
+  .single();
 ```
 
 ---
 
-## Free/Low-Cost Alternatives
+## Free/Low-Cost AI Alternatives
 
 ### Instead of OpenAI
 
 **Ollama (Free, Local):**
 ```bash
-# Install Ollama
 curl -fsSL https://ollama.com/install.sh | sh
-
-# Run Llama 2
 ollama run llama2
 ```
 
-Use the Ollama node in n8n instead of OpenAI.
-
 **Groq (Fast, Free Tier):**
 - Get API key from groq.com
-- Use HTTP Request node with Groq's API
+- Very fast inference
 
-### Instead of Pinecone
+### Using Supabase AI (Coming Soon)
 
-**ChromaDB (Free, Self-Hosted):**
-```bash
-pip install chromadb
-```
-
-**LanceDB (Free, Serverless):**
-Embedded vector database, no server needed.
+Supabase is adding built-in AI features - check their docs for updates.
 
 ---
 
@@ -260,40 +341,16 @@ Embedded vector database, no server needed.
 ### Documents Not Being Indexed
 
 1. Check file paths are correct
-2. Verify document formats (PDF, DOCX, DOC, TXT)
-3. Check vector database connection
+2. Verify Supabase connection
+3. Check that pgvector extension is enabled
 4. Review n8n execution logs
 
-### Meeting Booking Fails
+### GHL Integration Issues
 
-1. Verify Google Calendar OAuth is valid
-2. Check calendar permissions
-3. Review email sending credentials
-
----
-
-## Production Deployment
-
-### Recommended Setup
-
-1. **n8n**: Deploy on Railway, Render, or self-host on VPS
-2. **Redis**: Use Upstash (free tier) or managed Redis
-3. **Vector DB**: Pinecone free tier or Qdrant Cloud
-4. **Widget**: Host on your website's CDN
-
-### Security Considerations
-
-1. Enable CORS restrictions in webhook
-2. Add rate limiting
-3. Sanitize user inputs
-4. Use HTTPS everywhere
-5. Store API keys securely
-
-### Scaling
-
-- Use n8n queue mode for high traffic
-- Scale vector database as knowledge grows
-- Consider caching frequent queries
+1. Verify GHL API key permissions
+2. Check webhook URL in GHL settings
+3. Confirm location ID and calendar ID are correct
+4. Review GHL webhook logs
 
 ---
 
@@ -303,7 +360,8 @@ Embedded vector database, no server needed.
 n8n/
 ├── README.md                              # This guide
 ├── workflows/
-│   ├── chatbot-workflow.json             # Main chat handling
+│   ├── chatbot-workflow.json             # Main chat (custom widget)
+│   ├── ghl-chatbot-workflow.json         # GoHighLevel integration
 │   ├── document-ingestion-workflow.json  # PDF/Word processing
 │   └── website-scraper-workflow.json     # Website content ingestion
 └── widget/
@@ -313,14 +371,30 @@ n8n/
 
 ---
 
+## Production Checklist
+
+- [ ] n8n deployed and accessible via HTTPS
+- [ ] Supabase pgvector enabled and tables created
+- [ ] OpenAI API key configured
+- [ ] Website content indexed
+- [ ] Documents uploaded and indexed
+- [ ] Chat widget embedded on all pages
+- [ ] GHL webhook configured (if using GHL)
+- [ ] Calendar integration tested
+- [ ] CORS configured for security
+
+---
+
 ## Support
 
 - **n8n Documentation**: https://docs.n8n.io
 - **n8n Community**: https://community.n8n.io
+- **Supabase Docs**: https://supabase.com/docs
+- **GoHighLevel Docs**: https://help.gohighlevel.com
 - **OpenAI API Docs**: https://platform.openai.com/docs
 
 ---
 
 ## License
 
-MIT License - Feel free to customize for RhythmTraffic
+MIT License - Customize freely for RhythmTraffic

@@ -1,0 +1,419 @@
+{
+  "name": "RhythmTraffic Chatbot (Supabase)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "chat",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "webhook-chat",
+      "name": "Chat Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "webhookId": "chat-endpoint"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/get_chat_session",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"session_id\": \"{{ $json.body.sessionId }}\" }"
+      },
+      "id": "get-session",
+      "name": "Get Chat Session",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse incoming message and prepare context\nconst body = $('Chat Webhook').first().json.body;\nconst userMessage = body.message;\nconst sessionId = body.sessionId;\nconst pageUrl = body.pageUrl || '';\nconst pageTitle = body.pageTitle || '';\n\n// Get previous messages from Supabase response\nlet chatHistory = [];\ntry {\n  const sessionData = $('Get Chat Session').first().json;\n  if (sessionData && sessionData.messages) {\n    chatHistory = typeof sessionData.messages === 'string' \n      ? JSON.parse(sessionData.messages) \n      : sessionData.messages;\n  }\n} catch (e) {\n  chatHistory = [];\n}\n\n// Add user message to history\nchatHistory.push({\n  role: 'user',\n  content: userMessage,\n  timestamp: new Date().toISOString()\n});\n\nreturn {\n  userMessage,\n  sessionId,\n  pageUrl,\n  pageTitle,\n  chatHistory,\n  historyFormatted: chatHistory.slice(-10).map(m => `${m.role}: ${m.content}`).join('\\n')\n};"
+      },
+      "id": "prepare-context",
+      "name": "Prepare Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "model": "text-embedding-3-small",
+        "options": {}
+      },
+      "id": "create-query-embedding",
+      "name": "Create Query Embedding",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1,
+      "position": [850, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-creds",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/match_documents",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"query_embedding\": {{ JSON.stringify($json.embedding) }},\n  \"match_count\": 5\n}"
+      },
+      "id": "vector-search",
+      "name": "Search Knowledge Base",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine search results into context\nconst searchResults = $json;\nconst preparedData = $('Prepare Context').first().json;\n\nlet context = '';\nif (Array.isArray(searchResults) && searchResults.length > 0) {\n  context = searchResults\n    .filter(r => r.similarity > 0.7)\n    .map(r => r.content)\n    .join('\\n\\n---\\n\\n');\n}\n\nreturn {\n  ...preparedData,\n  context: context || 'No specific context found. Use general knowledge about RhythmTraffic.'\n};"
+      },
+      "id": "combine-context",
+      "name": "Combine Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a friendly and knowledgeable technical sales assistant for RhythmTraffic (www.rhythmtraffic.com). \n\nYOUR PERSONALITY:\n- Warm, approachable, and genuinely helpful\n- Conversational but professional tone\n- Enthusiastic about helping solve challenges\n- Patient and thorough in explanations\n\nYOUR KNOWLEDGE:\n- Use the provided context to give accurate answers\n- If you don't have specific info, acknowledge it and offer to connect them with an engineer\n- Be honest about what you know and don't know\n\nSALES APPROACH:\n- Listen to understand needs before suggesting solutions\n- Ask clarifying questions when helpful\n- Highlight relevant features based on their situation\n- Don't be pushy - be consultative\n\nBOOKING MEETINGS:\nWhen the prospect shows interest or needs technical discussion:\n- Proactively offer: \"I'd love to set up a quick call with one of our engineers. Would that be helpful?\"\n- When they agree, collect: name, email, preferred date/time\n- Confirm details and let them know an engineer will reach out"
+            },
+            {
+              "role": "user",
+              "content": "=KNOWLEDGE BASE CONTEXT:\n{{ $json.context }}\n\nCONVERSATION HISTORY:\n{{ $json.historyFormatted }}\n\nCURRENT MESSAGE:\n{{ $json.userMessage }}\n\nRespond naturally and helpfully."
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 800
+        }
+      },
+      "id": "openai-chat",
+      "name": "AI Chat Response",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [1450, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-creds",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process AI response\nconst aiResponse = $json.text || $json.content || $json.message?.content || '';\nconst preparedData = $('Combine Context').first().json;\nlet chatHistory = preparedData.chatHistory;\n\n// Add AI response to history\nchatHistory.push({\n  role: 'assistant',\n  content: aiResponse,\n  timestamp: new Date().toISOString()\n});\n\n// Check for meeting booking intent\nconst userMessage = preparedData.userMessage.toLowerCase();\nconst meetingKeywords = ['book', 'schedule', 'meeting', 'call', 'appointment', 'demo', 'talk to', 'speak with', 'engineer'];\nconst hasMeetingIntent = meetingKeywords.some(kw => userMessage.includes(kw));\n\n// Extract email if provided\nconst emailMatch = userMessage.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/);\n\nreturn {\n  response: aiResponse,\n  sessionId: preparedData.sessionId,\n  chatHistory,\n  hasMeetingIntent,\n  extractedEmail: emailMatch ? emailMatch[0] : null\n};"
+      },
+      "id": "process-response",
+      "name": "Process Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1650, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/chat_sessions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"id\": \"{{ $json.sessionId }}\",\n  \"messages\": {{ JSON.stringify($json.chatHistory) }},\n  \"updated_at\": \"{{ $now.toISO() }}\"\n}"
+      },
+      "id": "save-session",
+      "name": "Save Chat Session",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1850, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, response: $('Process Response').first().json.response, sessionId: $('Process Response').first().json.sessionId, hasMeetingIntent: $('Process Response').first().json.hasMeetingIntent }) }}"
+      },
+      "id": "respond-chat",
+      "name": "Respond to Chat",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2050, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $('Process Response').first().json.hasMeetingIntent && $('Process Response').first().json.extractedEmail }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "check-booking",
+      "name": "Should Book Meeting?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1850, 500]
+    },
+    {
+      "parameters": {
+        "resource": "event",
+        "operation": "create",
+        "calendarId": "primary",
+        "summary": "RhythmTraffic - Engineering Consultation",
+        "description": "=Meeting booked via website chatbot.\n\nProspect Email: {{ $('Process Response').first().json.extractedEmail }}\n\nRecent Conversation:\n{{ $('Process Response').first().json.chatHistory.slice(-5).map(m => m.role + ': ' + m.content).join('\\n') }}",
+        "start": "={{ $now.plus(1, 'day').set({hour: 10, minute: 0}).toISO() }}",
+        "end": "={{ $now.plus(1, 'day').set({hour: 10, minute: 30}).toISO() }}",
+        "options": {
+          "attendees": ["={{ $('Process Response').first().json.extractedEmail }}"]
+        }
+      },
+      "id": "create-calendar-event",
+      "name": "Create Calendar Event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.2,
+      "position": [2050, 500],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "google-calendar-creds",
+          "name": "Google Calendar"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/meeting_requests",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"email\": \"{{ $('Process Response').first().json.extractedEmail }}\",\n  \"session_id\": \"{{ $('Process Response').first().json.sessionId }}\",\n  \"status\": \"pending\",\n  \"context\": {{ JSON.stringify($('Process Response').first().json.chatHistory.slice(-5)) }}\n}"
+      },
+      "id": "log-meeting-request",
+      "name": "Log Meeting Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2250, 500]
+    }
+  ],
+  "connections": {
+    "Chat Webhook": {
+      "main": [
+        [
+          {
+            "node": "Get Chat Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Chat Session": {
+      "main": [
+        [
+          {
+            "node": "Prepare Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Context": {
+      "main": [
+        [
+          {
+            "node": "Create Query Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Query Embedding": {
+      "main": [
+        [
+          {
+            "node": "Search Knowledge Base",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Knowledge Base": {
+      "main": [
+        [
+          {
+            "node": "Combine Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combine Context": {
+      "main": [
+        [
+          {
+            "node": "AI Chat Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Chat Response": {
+      "main": [
+        [
+          {
+            "node": "Process Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Response": {
+      "main": [
+        [
+          {
+            "node": "Save Chat Session",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Should Book Meeting?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Chat Session": {
+      "main": [
+        [
+          {
+            "node": "Respond to Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Book Meeting?": {
+      "main": [
+        [
+          {
+            "node": "Create Calendar Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Calendar Event": {
+      "main": [
+        [
+          {
+            "node": "Log Meeting Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "chatbot",
+      "id": "1"
+    },
+    {
+      "name": "supabase",
+      "id": "8"
+    }
+  ],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}

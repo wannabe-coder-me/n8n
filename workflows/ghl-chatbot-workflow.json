@@ -1,0 +1,417 @@
+{
+  "name": "RhythmTraffic GHL Chatbot",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ghl-chat",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "ghl-webhook",
+      "name": "GHL Chat Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "webhookId": "ghl-chat-endpoint"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse GHL webhook payload\nconst body = $json.body;\n\n// GHL sends different payload structures\n// Adapt based on your GHL webhook configuration\nconst contactId = body.contact_id || body.contactId || '';\nconst locationId = body.location_id || body.locationId || '';\nconst conversationId = body.conversation_id || body.conversationId || '';\nconst message = body.message || body.body || body.text || '';\nconst contactName = body.contact_name || body.contactName || body.name || 'Visitor';\nconst contactEmail = body.email || body.contact_email || '';\nconst contactPhone = body.phone || body.contact_phone || '';\n\n// Generate session ID from contact or conversation\nconst sessionId = conversationId || contactId || `ghl_${Date.now()}`;\n\nreturn {\n  sessionId,\n  contactId,\n  locationId,\n  conversationId,\n  message,\n  contactName,\n  contactEmail,\n  contactPhone,\n  rawPayload: body\n};"
+      },
+      "id": "parse-ghl-webhook",
+      "name": "Parse GHL Webhook",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "key": "={{ 'ghl_chat_' + $json.sessionId }}"
+      },
+      "id": "get-ghl-memory",
+      "name": "Get Chat History",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [650, 300],
+      "credentials": {
+        "redis": {
+          "id": "redis-creds",
+          "name": "Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare context with chat history\nconst input = $('Parse GHL Webhook').first().json;\nconst previousMessages = $('Get Chat History').first().json.data || [];\n\nlet chatHistory = [];\ntry {\n  chatHistory = typeof previousMessages === 'string' \n    ? JSON.parse(previousMessages) \n    : previousMessages;\n} catch (e) {\n  chatHistory = [];\n}\n\n// Add user message\nchatHistory.push({\n  role: 'user',\n  content: input.message,\n  timestamp: new Date().toISOString()\n});\n\nreturn {\n  ...input,\n  chatHistory,\n  historyFormatted: chatHistory.slice(-10).map(m => `${m.role}: ${m.content}`).join('\\n')\n};"
+      },
+      "id": "prepare-ghl-context",
+      "name": "Prepare Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "operation": "text",
+        "text": "={{ $json.message }}",
+        "options": {
+          "returnAll": true,
+          "limit": 5
+        }
+      },
+      "id": "ghl-vector-search",
+      "name": "Search Knowledge Base",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreRetriever",
+      "typeVersion": 1,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 800
+        }
+      },
+      "id": "ghl-openai",
+      "name": "AI Response",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.5,
+      "position": [1250, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-creds",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "You are a friendly and knowledgeable technical sales assistant for RhythmTraffic (www.rhythmtraffic.com). \n\nCONTACT INFO:\n- Name: {{ $json.contactName }}\n- Email: {{ $json.contactEmail }}\n- Phone: {{ $json.contactPhone }}\n\nYOUR ROLE:\n1. Be warm, approachable, and genuinely helpful\n2. Use a conversational but professional tone\n3. Show enthusiasm about helping solve challenges\n4. Listen to understand needs before suggesting solutions\n\nKNOWLEDGE BASE CONTEXT:\n{{ $json.context }}\n\nCONVERSATION HISTORY:\n{{ $json.historyFormatted }}\n\nCURRENT MESSAGE:\n{{ $json.message }}\n\nBOOKING MEETINGS:\nWhen the prospect wants to schedule a meeting or talk to an engineer:\n1. Confirm their interest\n2. Let them know you'll set up a meeting\n3. Include the phrase [BOOK_MEETING] in your response (this triggers the booking flow)\n4. Ask for their preferred date/time if not provided\n\nIMPORTANT: Keep responses concise and friendly. Use the contact's name when appropriate."
+      },
+      "id": "ghl-prompt",
+      "name": "AI Prompt",
+      "type": "@n8n/n8n-nodes-langchain.prompt",
+      "typeVersion": 1,
+      "position": [1250, 450]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process AI response and detect booking intent\nconst aiResponse = $('AI Response').first().json.text;\nconst input = $('Prepare Context').first().json;\nlet chatHistory = input.chatHistory;\n\n// Add AI response to history\nchatHistory.push({\n  role: 'assistant',\n  content: aiResponse,\n  timestamp: new Date().toISOString()\n});\n\n// Check for booking trigger\nconst shouldBook = aiResponse.includes('[BOOK_MEETING]');\n\n// Clean the response (remove booking trigger)\nconst cleanResponse = aiResponse.replace('[BOOK_MEETING]', '').trim();\n\n// Extract any email from the conversation\nconst emailMatch = input.message.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/);\nconst detectedEmail = emailMatch ? emailMatch[0] : input.contactEmail;\n\nreturn {\n  response: cleanResponse,\n  sessionId: input.sessionId,\n  contactId: input.contactId,\n  locationId: input.locationId,\n  conversationId: input.conversationId,\n  contactName: input.contactName,\n  contactEmail: detectedEmail,\n  contactPhone: input.contactPhone,\n  chatHistory,\n  shouldBook\n};"
+      },
+      "id": "process-ghl-response",
+      "name": "Process Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 300]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "={{ 'ghl_chat_' + $json.sessionId }}",
+        "value": "={{ JSON.stringify($json.chatHistory) }}",
+        "options": {
+          "expire": 86400
+        }
+      },
+      "id": "save-ghl-memory",
+      "name": "Save Chat History",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [1650, 300],
+      "credentials": {
+        "redis": {
+          "id": "redis-creds",
+          "name": "Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.shouldBook }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "check-ghl-booking",
+      "name": "Should Book Meeting?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1850, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://services.leadconnectorhq.com/conversations/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Version",
+              "value": "2021-07-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"type\": \"SMS\",\n  \"conversationId\": \"{{ $json.conversationId }}\",\n  \"message\": \"{{ $json.response }}\"\n}"
+      },
+      "id": "send-ghl-message",
+      "name": "Send Message to GHL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1850, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ghl-api-creds",
+          "name": "GHL API Key"
+        }
+      },
+      "notes": "Sends response back to GHL conversation"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://services.leadconnectorhq.com/calendars/events/appointments",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Version",
+              "value": "2021-07-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"calendarId\": \"YOUR_GHL_CALENDAR_ID\",\n  \"locationId\": \"{{ $json.locationId }}\",\n  \"contactId\": \"{{ $json.contactId }}\",\n  \"startTime\": \"{{ $now.plus(1, 'day').set({hour: 10, minute: 0}).toISO() }}\",\n  \"endTime\": \"{{ $now.plus(1, 'day').set({hour: 10, minute: 30}).toISO() }}\",\n  \"title\": \"RhythmTraffic Engineering Consultation\",\n  \"appointmentStatus\": \"confirmed\",\n  \"assignedUserId\": \"YOUR_ENGINEER_USER_ID\",\n  \"notes\": \"Booked via AI Chatbot. Contact: {{ $json.contactName }} ({{ $json.contactEmail }})\"\n}"
+      },
+      "id": "create-ghl-appointment",
+      "name": "Create GHL Appointment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2050, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ghl-api-creds",
+          "name": "GHL API Key"
+        }
+      },
+      "notes": "Creates appointment in GHL calendar"
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://services.leadconnectorhq.com/contacts/{{ $json.contactId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Version",
+              "value": "2021-07-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"tags\": [\"chatbot-engaged\", \"meeting-booked\"],\n  \"customFields\": [\n    {\n      \"key\": \"chatbot_last_interaction\",\n      \"value\": \"{{ $now.toISO() }}\"\n    }\n  ]\n}"
+      },
+      "id": "update-ghl-contact",
+      "name": "Update GHL Contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2250, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ghl-api-creds",
+          "name": "GHL API Key"
+        }
+      },
+      "notes": "Tags contact in GHL CRM"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, response: $json.response, contactId: $json.contactId }) }}"
+      },
+      "id": "respond-ghl",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2050, 200]
+    }
+  ],
+  "connections": {
+    "GHL Chat Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse GHL Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse GHL Webhook": {
+      "main": [
+        [
+          {
+            "node": "Get Chat History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Chat History": {
+      "main": [
+        [
+          {
+            "node": "Prepare Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Context": {
+      "main": [
+        [
+          {
+            "node": "Search Knowledge Base",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Knowledge Base": {
+      "main": [
+        [
+          {
+            "node": "AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Response": {
+      "main": [
+        [
+          {
+            "node": "Process Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Response": {
+      "main": [
+        [
+          {
+            "node": "Save Chat History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Chat History": {
+      "main": [
+        [
+          {
+            "node": "Send Message to GHL",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Should Book Meeting?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Message to GHL": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Book Meeting?": {
+      "main": [
+        [
+          {
+            "node": "Create GHL Appointment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create GHL Appointment": {
+      "main": [
+        [
+          {
+            "node": "Update GHL Contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "gohighlevel",
+      "id": "7"
+    },
+    {
+      "name": "chatbot",
+      "id": "1"
+    }
+  ],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}
