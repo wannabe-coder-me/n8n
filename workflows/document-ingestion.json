@@ -1,5 +1,5 @@
 {
-  "name": "Rhythm Engineering - Document Ingestion",
+  "name": "Rhythm Engineering - Firecrawl Ingestion",
   "nodes": [
     {
       "parameters": {},
@@ -11,35 +11,75 @@
     },
     {
       "parameters": {
-        "jsCode": "// Define URLs to scrape\nconst urls = [\n  'https://rhythmtraffic.com',\n  'https://rhythmtraffic.com/about',\n  'https://rhythmtraffic.com/services',\n  'https://rhythmtraffic.com/solutions',\n  'https://rhythmtraffic.com/contact',\n  // Add more URLs as needed\n];\n\nreturn urls.map(url => ({ json: { url, type: 'website' } }));"
+        "method": "POST",
+        "url": "https://api.firecrawl.dev/v1/crawl",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"url\": \"https://rhythmengineering.com\",\n  \"limit\": 50,\n  \"scrapeOptions\": {\n    \"formats\": [\"markdown\"]\n  }\n}"
       },
-      "id": "urls",
-      "name": "Define URLs",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [450, 300]
-    },
-    {
-      "parameters": {
-        "url": "={{ $json.url }}",
-        "options": {}
-      },
-      "id": "scrape",
-      "name": "Scrape Website",
+      "id": "crawl",
+      "name": "Start Firecrawl",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [650, 300],
-      "continueOnFail": true
+      "position": [450, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "firecrawl-creds",
+          "name": "Firecrawl API"
+        }
+      }
     },
     {
       "parameters": {
-        "jsCode": "const html = $input.first().json.data || $input.first().json.body || '';\nconst url = $('Define URLs').item.json.url;\n\n// Simple HTML to text extraction\nlet text = html\n  .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '')\n  .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/\\s+/g, ' ')\n  .replace(/&nbsp;/g, ' ')\n  .replace(/&amp;/g, '&')\n  .replace(/&lt;/g, '<')\n  .replace(/&gt;/g, '>')\n  .replace(/&quot;/g, '\"')\n  .trim();\n\n// Skip if too short\nif (text.length < 100) {\n  return [];\n}\n\n// Chunk the text (roughly 1000 chars per chunk with overlap)\nconst chunkSize = 1000;\nconst overlap = 200;\nconst chunks = [];\n\nfor (let i = 0; i < text.length; i += chunkSize - overlap) {\n  const chunk = text.slice(i, i + chunkSize).trim();\n  if (chunk.length > 50) {\n    chunks.push({\n      json: {\n        content: chunk,\n        metadata: {\n          source: url,\n          type: 'website',\n          chunk_index: chunks.length\n        }\n      }\n    });\n  }\n}\n\nreturn chunks;"
+        "amount": 30,
+        "unit": "seconds"
       },
-      "id": "extract-text",
-      "name": "Extract & Chunk Text",
+      "id": "wait",
+      "name": "Wait for Crawl",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.firecrawl.dev/v1/crawl/{{ $('Start Firecrawl').item.json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "status",
+      "name": "Get Crawl Results",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "firecrawl-creds",
+          "name": "Firecrawl API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst results = [];\n\n// Check if crawl is complete\nif (response.status !== 'completed') {\n  // Return info to wait more if needed\n  return [{ json: { status: response.status, message: 'Crawl still in progress. Run again or increase wait time.' } }];\n}\n\nconst data = response.data || [];\n\nfor (const page of data) {\n  const markdown = page.markdown || '';\n  const url = page.metadata?.sourceURL || page.url || '';\n  const title = page.metadata?.title || '';\n  \n  if (markdown.length < 100) continue;\n  \n  // Chunk the markdown content\n  const chunkSize = 1000;\n  const overlap = 200;\n  \n  for (let i = 0; i < markdown.length; i += chunkSize - overlap) {\n    const chunk = markdown.slice(i, i + chunkSize).trim();\n    if (chunk.length > 50) {\n      results.push({\n        json: {\n          content: chunk,\n          metadata: {\n            source: url,\n            title: title,\n            type: 'website',\n            chunk_index: results.length\n          }\n        }\n      });\n    }\n  }\n}\n\nreturn results;"
+      },
+      "id": "chunk",
+      "name": "Process & Chunk",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [850, 300]
+      "position": [1050, 300]
     },
     {
       "parameters": {
@@ -50,7 +90,7 @@
       "name": "Embeddings OpenAI",
       "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
       "typeVersion": 1.2,
-      "position": [1100, 500],
+      "position": [1300, 500],
       "credentials": {
         "openAiApi": {
           "id": "openai-creds",
@@ -67,7 +107,7 @@
       "name": "Supabase Vector Store",
       "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
       "typeVersion": 1,
-      "position": [1100, 300],
+      "position": [1300, 300],
       "credentials": {
         "supabaseApi": {
           "id": "supabase-creds",
@@ -77,13 +117,13 @@
     },
     {
       "parameters": {
-        "content": "## Document Ingestion Workflow\n\nThis workflow:\n1. Scrapes Rhythm Engineering website pages\n2. Extracts and chunks text\n3. Creates embeddings via OpenAI\n4. Stores in Supabase vector database\n\n**To add PDF ingestion:**\n- Use the \"Read Binary Files\" node to read PDFs\n- Use \"Extract from File\" node to get text\n- Connect to the chunking logic\n\n**Run this workflow manually to populate the knowledge base.**"
+        "content": "## Firecrawl Ingestion Workflow\n\n**How it works:**\n1. Starts a crawl job on Firecrawl\n2. Waits 30 seconds for crawl to complete\n3. Fetches results (clean markdown)\n4. Chunks content\n5. Stores embeddings in Supabase\n\n**Setup:**\n1. Get Firecrawl API key from firecrawl.dev\n2. Create Header Auth credential:\n   - Name: Authorization\n   - Value: Bearer YOUR_API_KEY\n3. Update the URL in 'Start Firecrawl' node\n4. Adjust 'limit' for number of pages\n\n**Benefits over basic scraping:**\n- Handles JavaScript-rendered sites\n- Returns clean markdown (no HTML cleanup)\n- Automatically finds linked pages\n- Bypasses anti-bot protections"
       },
       "id": "note",
       "name": "Sticky Note",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [240, 100]
+      "position": [240, 60]
     }
   ],
   "connections": {
@@ -91,36 +131,47 @@
       "main": [
         [
           {
-            "node": "Define URLs",
+            "node": "Start Firecrawl",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Define URLs": {
+    "Start Firecrawl": {
       "main": [
         [
           {
-            "node": "Scrape Website",
+            "node": "Wait for Crawl",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Scrape Website": {
+    "Wait for Crawl": {
       "main": [
         [
           {
-            "node": "Extract & Chunk Text",
+            "node": "Get Crawl Results",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Extract & Chunk Text": {
+    "Get Crawl Results": {
+      "main": [
+        [
+          {
+            "node": "Process & Chunk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process & Chunk": {
       "main": [
         [
           {
