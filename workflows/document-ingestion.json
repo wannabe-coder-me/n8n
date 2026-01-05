@@ -1,0 +1,153 @@
+{
+  "name": "Rhythm Engineering - Document Ingestion",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Define URLs to scrape\nconst urls = [\n  'https://rhythmtraffic.com',\n  'https://rhythmtraffic.com/about',\n  'https://rhythmtraffic.com/services',\n  'https://rhythmtraffic.com/solutions',\n  'https://rhythmtraffic.com/contact',\n  // Add more URLs as needed\n];\n\nreturn urls.map(url => ({ json: { url, type: 'website' } }));"
+      },
+      "id": "urls",
+      "name": "Define URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {}
+      },
+      "id": "scrape",
+      "name": "Scrape Website",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $input.first().json.data || $input.first().json.body || '';\nconst url = $('Define URLs').item.json.url;\n\n// Simple HTML to text extraction\nlet text = html\n  .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '')\n  .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/\\s+/g, ' ')\n  .replace(/&nbsp;/g, ' ')\n  .replace(/&amp;/g, '&')\n  .replace(/&lt;/g, '<')\n  .replace(/&gt;/g, '>')\n  .replace(/&quot;/g, '\"')\n  .trim();\n\n// Skip if too short\nif (text.length < 100) {\n  return [];\n}\n\n// Chunk the text (roughly 1000 chars per chunk with overlap)\nconst chunkSize = 1000;\nconst overlap = 200;\nconst chunks = [];\n\nfor (let i = 0; i < text.length; i += chunkSize - overlap) {\n  const chunk = text.slice(i, i + chunkSize).trim();\n  if (chunk.length > 50) {\n    chunks.push({\n      json: {\n        content: chunk,\n        metadata: {\n          source: url,\n          type: 'website',\n          chunk_index: chunks.length\n        }\n      }\n    });\n  }\n}\n\nreturn chunks;"
+      },
+      "id": "extract-text",
+      "name": "Extract & Chunk Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "model": "text-embedding-3-small",
+        "options": {}
+      },
+      "id": "embeddings",
+      "name": "Embeddings OpenAI",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1.2,
+      "position": [1100, 500],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-creds",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "tableName": "documents"
+      },
+      "id": "vectorstore",
+      "name": "Supabase Vector Store",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
+      "typeVersion": 1,
+      "position": [1100, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "supabase-creds",
+          "name": "Supabase API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Document Ingestion Workflow\n\nThis workflow:\n1. Scrapes Rhythm Engineering website pages\n2. Extracts and chunks text\n3. Creates embeddings via OpenAI\n4. Stores in Supabase vector database\n\n**To add PDF ingestion:**\n- Use the \"Read Binary Files\" node to read PDFs\n- Use \"Extract from File\" node to get text\n- Connect to the chunking logic\n\n**Run this workflow manually to populate the knowledge base.**"
+      },
+      "id": "note",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [240, 100]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Define URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Define URLs": {
+      "main": [
+        [
+          {
+            "node": "Scrape Website",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape Website": {
+      "main": [
+        [
+          {
+            "node": "Extract & Chunk Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract & Chunk Text": {
+      "main": [
+        [
+          {
+            "node": "Supabase Vector Store",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings OpenAI": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Supabase Vector Store",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}

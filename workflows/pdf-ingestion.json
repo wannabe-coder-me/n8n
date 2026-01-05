@@ -1,0 +1,153 @@
+{
+  "name": "Rhythm Engineering - PDF Ingestion",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "filePath": "/path/to/your/pdfs/",
+        "options": {}
+      },
+      "id": "readfiles",
+      "name": "Read PDF Files",
+      "type": "n8n-nodes-base.readBinaryFiles",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "options": {}
+      },
+      "id": "extract",
+      "name": "Extract from PDF",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const text = item.json.text || item.json.data || '';\n  const fileName = item.json.fileName || 'unknown.pdf';\n  \n  if (text.length < 50) continue;\n  \n  // Chunk the text\n  const chunkSize = 1000;\n  const overlap = 200;\n  \n  for (let i = 0; i < text.length; i += chunkSize - overlap) {\n    const chunk = text.slice(i, i + chunkSize).trim();\n    if (chunk.length > 50) {\n      results.push({\n        json: {\n          content: chunk,\n          metadata: {\n            source: fileName,\n            type: 'pdf',\n            chunk_index: results.length\n          }\n        }\n      });\n    }\n  }\n}\n\nreturn results;"
+      },
+      "id": "chunk",
+      "name": "Chunk Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "model": "text-embedding-3-small",
+        "options": {}
+      },
+      "id": "embeddings",
+      "name": "Embeddings OpenAI",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1.2,
+      "position": [1100, 500],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-creds",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "tableName": "documents"
+      },
+      "id": "vectorstore",
+      "name": "Supabase Vector Store",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
+      "typeVersion": 1,
+      "position": [1100, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "supabase-creds",
+          "name": "Supabase API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## PDF Ingestion Workflow\n\n**Setup:**\n1. Update 'Read PDF Files' node with your PDF folder path\n2. Add OpenAI and Supabase credentials\n3. Run manually to ingest PDFs\n\n**The workflow will:**\n1. Read all PDFs from the folder\n2. Extract text from each PDF\n3. Chunk into ~1000 char segments\n4. Create embeddings\n5. Store in Supabase\n\n**Alternative: Upload via webhook**\nYou can replace Manual Trigger with a Webhook to accept PDF uploads."
+      },
+      "id": "note",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [240, 100]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read PDF Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read PDF Files": {
+      "main": [
+        [
+          {
+            "node": "Extract from PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from PDF": {
+      "main": [
+        [
+          {
+            "node": "Chunk Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chunk Text": {
+      "main": [
+        [
+          {
+            "node": "Supabase Vector Store",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings OpenAI": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Supabase Vector Store",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}
